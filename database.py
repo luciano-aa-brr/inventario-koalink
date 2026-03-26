@@ -1,6 +1,40 @@
 import sqlite3
 import os
 import sys
+import shutil
+from datetime import datetime, timezone, timedelta
+
+# --- CONFIGURACIÓN MAESTRA DE CATEGORÍAS ---
+# Si en el futuro quieres agregar algo nuevo, SOLO lo agregas aquí.
+CATEGORIAS_PREFIJOS = {
+    "Tablet": "TAB",
+    "Notebook": "NOTE",
+    "PC": "PC",
+    "Libro": "LIB",
+    "Material Didáctico": "MAT",
+    "Impresora": "IMP",
+    "Proyector": "PROY"
+}
+
+def obtener_hora_chile():
+    """Genera la hora exacta de Chile (UTC-3) para insertarla en la base de datos."""
+    zona_chile = timezone(timedelta(hours=-3))
+    return datetime.now(zona_chile).strftime("%Y-%m-%d %H:%M:%S")
+
+def crear_backup():
+    """Crea una copia de seguridad de la base de datos."""
+    if not os.path.exists('backups'):
+        os.makedirs('backups')
+        
+    fecha = datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
+    ruta_db = 'data/inventario.db' # Asegúrate que esta sea la ruta correcta a tu DB
+    ruta_backup = f'backups/Respaldo_{fecha}.db'
+    
+    try:
+        shutil.copy2(ruta_db, ruta_backup)
+        return True, f"Backup guardado como: Respaldo_{fecha}.db"
+    except Exception as e:
+        return False, f"Error al hacer backup: {e}"
 
 def recurso_ruta(relative_path):
     """ Gestiona rutas para el .exe """
@@ -94,22 +128,24 @@ def inicializar_tablas():
     conn.close()
 
 def obtener_articulos_inactivos_reporte():
-    """Trae los datos de la tabla 'bajas' sumados por código."""
+    """Trae las bajas agrupadas matemáticamente, mostrando el motivo exacto declarado."""
     try:
         conn = conectar_db()
         cursor = conn.cursor()
-        # Sumamos las bajas para mostrar el total acumulado de ese ítem
+        
+        # Ahora el responsable real viene escrito dentro de "ultimo_motivo"
         query = '''
             SELECT 
                 b.codigo_articulo, 
                 a.nombre, 
-                'Inactivo' as estado, 
-                SUM(b.cantidad_baja) as stock_en_baja, 
-                'Bodega' as ubicacion
+                (SELECT motivo FROM bajas WHERE codigo_articulo = b.codigo_articulo AND cantidad_baja > 0 ORDER BY fecha_baja DESC LIMIT 1) AS ultimo_motivo,
+                SUM(b.cantidad_baja) AS stock_en_baja, 
+                (SELECT fecha_baja FROM bajas WHERE codigo_articulo = b.codigo_articulo AND cantidad_baja > 0 ORDER BY fecha_baja DESC LIMIT 1) AS ultima_fecha
             FROM bajas b
             JOIN articulos a ON b.codigo_articulo = a.codigo_barras
             GROUP BY b.codigo_articulo
             HAVING stock_en_baja > 0
+            ORDER BY ultima_fecha DESC
         '''
         cursor.execute(query)
         items = cursor.fetchall()
@@ -182,36 +218,24 @@ def guardar_item_db(codigo, nombre, categoria, ubicacion, cantidad):
         return False, str(e)
     
 def generar_siguiente_codigo(categoria):
-    """
-    Busca el último código en la DB según la categoría y entrega el siguiente.
-    Ejemplo: Si el último es TAB-010, entrega TAB-011.
-    """
-    prefijos = {
-        "Tablet": "TAB",
-        "Notebook": "NOTE",
-        "Libro": "LIB",
-        "Material Didáctico": "MAT",
-        "Impresora": "IMP"
-    }
-    prefijo = prefijos.get(categoria, "EQU") # EQU por defecto si no coincide
+    """Genera el código automáticamente leyendo el diccionario maestro."""
+    # Lee el prefijo directamente de la configuración maestra
+    prefijo = CATEGORIAS_PREFIJOS.get(categoria, "EQU") # EQU si no existe
     
     conn = conectar_db()
     cursor = conn.cursor()
     
-    # Buscamos el código más alto que empiece con ese prefijo
     cursor.execute(f"SELECT codigo_barras FROM articulos WHERE codigo_barras LIKE '{prefijo}-%' ORDER BY codigo_barras DESC LIMIT 1")
     ultimo = cursor.fetchone()
     conn.close()
 
     if ultimo:
-        # Extraemos el número después del guion y sumamos 1
         ultimo_num = int(ultimo[0].split("-")[1])
         nuevo_num = ultimo_num + 1
     else:
-        # Si es el primero de esa categoría
         nuevo_num = 1
         
-    return f"{prefijo}-{nuevo_num:03d}" # Formato: TAB-001
+    return f"{prefijo}-{nuevo_num:03d}"
 
 def obtener_articulos_inventario_completo(categoria="Todos", mostrar_inactivos=False):
     conn = conectar_db()
@@ -255,13 +279,54 @@ def obtener_articulos_inventario_completo(categoria="Todos", mostrar_inactivos=F
     items = cursor.fetchall()
     conn.close()
     return items
+
+def obtener_articulos_con_stock(busqueda="", categoria="Todos"):
+    """
+    Obtiene los artículos calculando el stock total real (Disponibles + Prestados).
+    """
+    conn = conectar_db()
+    cursor = conn.cursor()
+    
+    # NUEVA MATEMÁTICA:
+    # a.cantidad = Es lo que realmente hay en la bodega (Disponibles)
+    # COUNT(...) = Es lo que está fuera de la bodega (En Préstamo)
+    # Stock Total = a.cantidad + COUNT(...)
+    
+    query = '''
+        SELECT 
+            a.codigo_barras, 
+            a.nombre, 
+            a.ubicacion, 
+            (a.cantidad + COUNT(dp.codigo_articulo)) AS stock_total,
+            COUNT(dp.codigo_articulo) AS en_prestamo,
+            a.cantidad AS disponibles
+        FROM articulos a
+        LEFT JOIN detalle_prestamo dp ON a.codigo_barras = dp.codigo_articulo AND dp.fecha_devolucion_item IS NULL
+        WHERE a.nombre LIKE ? AND a.estado != 'Inactivo'
+    '''
+    params = [f"%{busqueda}%"]
+    
+    if categoria != "Todos":
+        query += " AND a.categoria = ?"
+        params.append(categoria)
+        
+    query += " GROUP BY a.codigo_barras"
+    
+    try:
+        cursor.execute(query, params)
+        items = cursor.fetchall()
+    except Exception as e:
+        print(f"Error SQL en obtener_articulos_con_stock: {e}")
+        items = []
+        
+    conn.close()
+    return items
     
 def dar_de_baja_db(codigo, cantidad_baja, motivo="Baja de Inventario"):
     try:
         conn = conectar_db()
         cursor = conn.cursor()
         
-        # 1. Verificar stock real antes de restar
         cursor.execute("SELECT cantidad, nombre FROM articulos WHERE codigo_barras = ?", (codigo,))
         res = cursor.fetchone()
         if not res or res[0] < cantidad_baja:
@@ -270,15 +335,14 @@ def dar_de_baja_db(codigo, cantidad_baja, motivo="Baja de Inventario"):
         
         nombre_art = res[1]
 
-        # 2. Restar del inventario (Nunca bajará de 0 por la validación anterior)
         cursor.execute("UPDATE articulos SET cantidad = cantidad - ? WHERE codigo_barras = ?", (cantidad_baja, codigo))
-        
-        # 3. Si el stock llegó a 0, marcar como Inactivo automáticamente
         cursor.execute("UPDATE articulos SET estado = 'Inactivo' WHERE codigo_barras = ? AND cantidad <= 0", (codigo,))
 
-        # 4. REGISTRAR EN TABLA BAJAS (Para que se vea en el apartado Inactivos)
-        cursor.execute("INSERT INTO bajas (codigo_articulo, cantidad_baja, motivo) VALUES (?, ?, ?)", 
-                       (codigo, cantidad_baja, motivo))
+        hora_exacta = obtener_hora_chile()
+        
+        # Insertar con hora forzada
+        cursor.execute("INSERT INTO bajas (codigo_articulo, cantidad_baja, motivo, fecha_baja) VALUES (?, ?, ?, ?)", 
+                       (codigo, cantidad_baja, motivo, hora_exacta))
         
         conn.commit()
         conn.close()
@@ -307,7 +371,6 @@ def reactivar_item_db(codigo, cantidad_a_recuperar):
         conn = conectar_db()
         cursor = conn.cursor()
         
-        # 1. ¿Hay suficientes en la tabla de bajas para reactivar?
         cursor.execute("SELECT SUM(cantidad_baja) FROM bajas WHERE codigo_articulo = ?", (codigo,))
         total_en_baja = cursor.fetchone()[0] or 0
         
@@ -315,13 +378,13 @@ def reactivar_item_db(codigo, cantidad_a_recuperar):
             conn.close()
             return False, "No puedes reactivar más de lo que se dio de baja."
 
-        # 2. Devolver al stock principal y poner estado Disponible
         cursor.execute("UPDATE articulos SET cantidad = cantidad + ?, estado = 'Disponible' WHERE codigo_barras = ?", 
                        (cantidad_a_recuperar, codigo))
         
-        # 3. Restar de la tabla de bajas (insertando un registro negativo para balancear)
-        cursor.execute("INSERT INTO bajas (codigo_articulo, cantidad_baja, motivo) VALUES (?, ?, ?)", 
-                       (codigo, -cantidad_a_recuperar, "Reactivación"))
+        hora_exacta = obtener_hora_chile()
+        
+        cursor.execute("INSERT INTO bajas (codigo_articulo, cantidad_baja, motivo, fecha_baja) VALUES (?, ?, ?, ?)", 
+                       (codigo, -cantidad_a_recuperar, "Reactivación", hora_exacta))
         
         conn.commit()
         conn.close()
@@ -334,7 +397,7 @@ def registrar_prestamo_multiple(responsable, destino, tipo_usuario, lista_carrit
         conn = conectar_db()
         cursor = conn.cursor()
         
-        # 1. VALIDACIÓN PREVIA: Revisar que TODO el carrito tenga stock
+        # 1. VALIDACIÓN PREVIA
         for item in lista_carrito:
             cursor.execute("SELECT cantidad, nombre FROM articulos WHERE codigo_barras = ?", (item["codigo"],))
             resultado = cursor.fetchone()
@@ -346,21 +409,17 @@ def registrar_prestamo_multiple(responsable, destino, tipo_usuario, lista_carrit
             if stock_actual < item["cantidad"]:
                 return False, f"¡Error! No hay suficiente stock de '{nombre_art}'.\nDisponible: {stock_actual}"
 
-        # 2. Si llegamos aquí, hay stock de todo. Procedemos a registrar.
-        cursor.execute('''INSERT INTO prestamos (responsable, destino, tipo_usuario) 
-                          VALUES (?, ?, ?)''', (responsable, destino, tipo_usuario))
+        # 2. Registrar el préstamo con la HORA EXACTA DE CHILE
+        hora_exacta = obtener_hora_chile()
+        cursor.execute('''INSERT INTO prestamos (responsable, destino, tipo_usuario, fecha_salida) 
+                          VALUES (?, ?, ?, ?)''', (responsable, destino, tipo_usuario, hora_exacta))
         id_prestamo = cursor.lastrowid
 
         for item in lista_carrito:
-            # Descontar stock
             cursor.execute("UPDATE articulos SET cantidad = cantidad - ? WHERE codigo_barras = ?", 
                            (item["cantidad"], item["codigo"]))
-            
-            # Si el stock llega a 0, marcar como 'Prestado' automáticamente
             cursor.execute("UPDATE articulos SET estado = 'Prestado' WHERE cantidad = 0 AND codigo_barras = ?", 
                            (item["codigo"],))
-            
-            # Registrar detalle
             cursor.execute('''INSERT INTO detalle_prestamo (id_prestamo, codigo_articulo, cantidad_prestada) 
                               VALUES (?, ?, ?)''', (id_prestamo, item["codigo"], item["cantidad"]))
 
@@ -439,32 +498,30 @@ def obtener_detalles_prestados(busqueda=""):
     return rows
 
 def registrar_devolucion_item_db(id_detalle, codigo_art, cantidad_regresada):
-    """Procesa la devolución y maneja si es total o parcial."""
+    """Procesa la devolución y maneja si es total o parcial con hora local."""
     try:
         conn = conectar_db()
         cursor = conn.cursor()
         
-        # 1. Obtener cuánto se prestó originalmente
         cursor.execute("SELECT cantidad_prestada FROM detalle_prestamo WHERE id = ?", (id_detalle,))
         cant_original = cursor.fetchone()[0]
 
+        hora_exacta = obtener_hora_chile() # Hora de recepción
+
         if cantidad_regresada >= cant_original:
-            # DEVOLUCIÓN TOTAL: Cerramos el registro
+            # DEVOLUCIÓN TOTAL: Cerramos el registro con hora de Chile
             cursor.execute('''UPDATE detalle_prestamo 
-                              SET fecha_devolucion_item = CURRENT_TIMESTAMP 
-                              WHERE id = ?''', (id_detalle,))
+                              SET fecha_devolucion_item = ? 
+                              WHERE id = ?''', (hora_exacta, id_detalle))
         else:
-            # DEVOLUCIÓN PARCIAL: Restamos la cantidad del préstamo pero queda abierto
+            # DEVOLUCIÓN PARCIAL
             nueva_cant_pendiente = cant_original - cantidad_regresada
             cursor.execute('''UPDATE detalle_prestamo 
                               SET cantidad_prestada = ? 
                               WHERE id = ?''', (nueva_cant_pendiente, id_detalle))
         
-        # 2. Reingresar stock al inventario general
         cursor.execute("UPDATE articulos SET cantidad = cantidad + ? WHERE codigo_barras = ?", 
                        (cantidad_regresada, codigo_art))
-        
-        # Asegurar estado disponible
         cursor.execute("UPDATE articulos SET estado = 'Disponible' WHERE codigo_barras = ?", (codigo_art,))
         
         conn.commit()
@@ -473,13 +530,11 @@ def registrar_devolucion_item_db(id_detalle, codigo_art, cantidad_regresada):
     except Exception as e:
         return False, str(e)
     
-def obtener_historial_activos_db():
-    """Trae todos los registros de la tabla detalle_prestamo que no han sido devueltos."""
+def obtener_historial_activos_db(busqueda="", categoria="Todos"):
+    """Trae los registros activos incluyendo el ID del préstamo para poder editarlo."""
     try:
         conn = conectar_db()
         cursor = conn.cursor()
-        
-        # Unimos las tablas para tener: Nombre Articulo, Responsable, Destino, Cantidad y Fecha
         query = '''
             SELECT 
                 a.nombre, 
@@ -488,14 +543,23 @@ def obtener_historial_activos_db():
                 p.tipo_usuario,
                 dp.cantidad_prestada, 
                 p.fecha_salida,
-                a.codigo_barras
+                a.codigo_barras,
+                p.id  -- <--- AGREGAMOS EL ID AL FINAL
             FROM detalle_prestamo dp
             JOIN prestamos p ON dp.id_prestamo = p.id
             JOIN articulos a ON dp.codigo_articulo = a.codigo_barras
             WHERE dp.fecha_devolucion_item IS NULL
-            ORDER BY p.fecha_salida DESC
         '''
-        cursor.execute(query)
+        params = []
+        if busqueda:
+            query += " AND (a.nombre LIKE ? OR p.responsable LIKE ? OR a.codigo_barras LIKE ?)"
+            termino = f"%{busqueda}%"
+            params.extend([termino, termino, termino])
+        if categoria != "Todos":
+            query += " AND a.categoria = ?"
+            params.append(categoria)
+        query += " ORDER BY p.fecha_salida DESC"
+        cursor.execute(query, params)
         datos = cursor.fetchall()
         conn.close()
         return datos
@@ -519,3 +583,18 @@ def crear_tabla_bajas():
     ''')
     conn.commit()
     conn.close()
+
+def actualizar_info_prestamo_db(id_prestamo, nuevo_resp, nuevo_dest, nuevo_tipo):
+    """Actualiza la información de texto de un préstamo activo."""
+    try:
+        conn = conectar_db()
+        cursor = conn.cursor()
+        cursor.execute('''UPDATE prestamos 
+                          SET responsable = ?, destino = ?, tipo_usuario = ? 
+                          WHERE id = ?''', 
+                       (nuevo_resp, nuevo_dest, nuevo_tipo, id_prestamo))
+        conn.commit()
+        conn.close()
+        return True, "Información del préstamo actualizada."
+    except Exception as e:
+        return False, str(e)
