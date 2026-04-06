@@ -63,6 +63,9 @@ class AppKoaLink(ctk.CTk):
         # 1. Título y Pantalla Completa Automática
         self.title("KoaLink - Escuela Araucanía")
 
+        # Temporizador global para búsquedas inteligentes (Debounce)
+        self.timer_busqueda = None
+
         try:
             ruta_icono = recurso_ruta("assets/logo.ico")
             if os.path.exists(ruta_icono):
@@ -140,6 +143,17 @@ class AppKoaLink(ctk.CTk):
         
         # Aplicar la geometría con las coordenadas exactas
         ventana.geometry(f"{ancho}x{alto}+{x}+{y}")
+
+    
+    def busqueda_inteligente(self, evento, funcion_a_ejecutar):
+        """Aplica el efecto 'Debounce' para no saturar la BD y la Interfaz al escribir."""
+        # Si el usuario presionó una tecla y ya había un cronómetro corriendo, lo cancelamos
+        if self.timer_busqueda is not None:
+            self.after_cancel(self.timer_busqueda)
+        
+        # Iniciamos un nuevo cronómetro de 500 milisegundos (0.5 segundos).
+        # Si no se presiona ninguna tecla nueva en ese tiempo, se dispara la búsqueda real.
+        self.timer_busqueda = self.after(500, funcion_a_ejecutar)
 
     def limpiar_panel(self):
         for widget in self.main_frame.winfo_children():
@@ -257,7 +271,7 @@ class AppKoaLink(ctk.CTk):
         self.entry_buscador = ctk.CTkEntry(f_busqueda, placeholder_text="🔍 Buscar ítem por nombre...", width=300)
         self.entry_buscador.pack(side="left")
         # Actualiza la tabla automáticamente al soltar una tecla
-        self.entry_buscador.bind("<KeyRelease>", lambda e: self.actualizar_tabla_inventario())
+        self.entry_buscador.bind("<KeyRelease>", lambda e: self.busqueda_inteligente(e, self.actualizar_tabla_inventario))
 
         # --- CONTENEDOR DE LA TABLA (Con Scroll) ---
         self.tabla_container = ctk.CTkScrollableFrame(self.main_frame, fg_color="#1d1d1d")
@@ -268,82 +282,84 @@ class AppKoaLink(ctk.CTk):
 
 
     def actualizar_tabla_inventario(self):
-        """Dibuja las filas de la tabla soportando Búsqueda, Filtros y Reportes Técnicos de Bajas."""
+        """Dibuja las filas del inventario usando la misma arquitectura visual del Historial."""
         try:
-            # 1. Limpiar filas anteriores
             for w in self.tabla_container.winfo_children():
                 w.destroy()
 
-            # 2. Obtener valores de los filtros y búsqueda
             categoria = self.filtro_cat.get() if hasattr(self, 'filtro_cat') else "Todos"
             ver_de_baja = self.ver_inactivos_var.get()
             texto_busqueda = self.entry_buscador.get() if hasattr(self, 'entry_buscador') else ""
 
-            # 3. Definir Encabezados según el modo
+            # --- ENCABEZADO DE LA TABLA (Estilo Historial) ---
+            h_frame = ctk.CTkFrame(self.tabla_container, fg_color="#333333")
+            h_frame.pack(fill="x", pady=(0, 5))
+
             if ver_de_baja:
-                # --- NUEVOS ENCABEZADOS DE AUDITORÍA (6 columnas) ---
-                headers = ["FECHA BAJA", "CÓDIGO", "NOMBRE", "MOTIVO Y RESPONSABLE", "CANT.", "ACCIONES"]
+                ctk.CTkLabel(h_frame, text="FECHA BAJA", width=90, anchor="w", font=("Arial", 11, "bold")).pack(side="left", padx=5, pady=5)
+                ctk.CTkLabel(h_frame, text="CÓDIGO", width=70, anchor="w", font=("Arial", 11, "bold")).pack(side="left", padx=5, pady=5)
+                ctk.CTkLabel(h_frame, text="NOMBRE", width=180, anchor="w", font=("Arial", 11, "bold")).pack(side="left", padx=5, pady=5)
+                ctk.CTkLabel(h_frame, text="MOTIVO Y RESPONSABLE", width=250, anchor="w", font=("Arial", 11, "bold")).pack(side="left", padx=5, pady=5)
+                ctk.CTkLabel(h_frame, text="CANT.", width=50, font=("Arial", 11, "bold")).pack(side="left", padx=5, pady=5)
+                ctk.CTkLabel(h_frame, text="ACCIONES", width=90, font=("Arial", 11, "bold")).pack(side="left", padx=5, pady=5)
             else:
-                # --- ENCABEZADOS NORMALES (7 columnas) ---
-                headers = ["CÓDIGO", "NOMBRE", "UBICACIÓN", "STOCK TOTAL", "EN PRÉSTAMO", "DISPONIBLES", "ACCIONES"]
+                ctk.CTkLabel(h_frame, text="CÓDIGO", width=80, anchor="w", font=("Arial", 11, "bold")).pack(side="left", padx=5, pady=5)
+                ctk.CTkLabel(h_frame, text="NOMBRE", width=200, anchor="w", font=("Arial", 11, "bold")).pack(side="left", padx=5, pady=5)
+                ctk.CTkLabel(h_frame, text="UBICACIÓN", width=120, anchor="w", font=("Arial", 11, "bold")).pack(side="left", padx=5, pady=5)
+                ctk.CTkLabel(h_frame, text="TOTAL", width=70, font=("Arial", 11, "bold")).pack(side="left", padx=5, pady=5)
+                ctk.CTkLabel(h_frame, text="PRÉSTAMO", width=80, font=("Arial", 11, "bold")).pack(side="left", padx=5, pady=5)
+                ctk.CTkLabel(h_frame, text="DISPONIBLE", width=80, font=("Arial", 11, "bold")).pack(side="left", padx=5, pady=5)
+                ctk.CTkLabel(h_frame, text="ACCIONES", width=80, font=("Arial", 11, "bold")).pack(side="left", padx=5, pady=5)
 
-            for i, h in enumerate(headers):
-                ctk.CTkLabel(self.tabla_container, text=h, font=("Arial", 11, "bold"), 
-                             text_color="#aaaaaa").grid(row=0, column=i, padx=5, pady=10)
-
-            # 4. Cargar datos desde la Base de Datos
+            # Cargar datos
             if ver_de_baja:
                 items = database.obtener_articulos_inactivos_reporte()
             else:
                 items = database.obtener_articulos_con_stock(texto_busqueda, categoria)
 
-            # 5. Bucle para construir las filas
+            # --- DIBUJAR FILAS (Arquitectura de bloques del Historial) ---
             for idx, it in enumerate(items, start=1):
+                color_fila = "#2b2b2b" if idx % 2 == 0 else "transparent"
+                
+                f = ctk.CTkFrame(self.tabla_container, fg_color=color_fila, corner_radius=4)
+                f.pack(fill="x", pady=1, padx=2)
+
                 if ver_de_baja:
-                    cod, nom, motivo_y_responsable, cant, fecha = it  # <--- Solo 5 variables aquí
+                    cod, nom, motivo_y_responsable, cant, fecha = it  
                     fecha_corta = fecha[:10] if fecha else "N/A"
                     
-                    # Alineación exacta a los encabezados (0 a 5)
-                    ctk.CTkLabel(self.tabla_container, text=fecha_corta).grid(row=idx, column=0, padx=5, pady=5)
-                    ctk.CTkLabel(self.tabla_container, text=cod).grid(row=idx, column=1, padx=5, pady=5)
-                    ctk.CTkLabel(self.tabla_container, text=nom, wraplength=150).grid(row=idx, column=2, padx=5, pady=5)
-                    
-                    # Esta celda ahora mostrará: "Pantalla rota | Culpable: Juan"
-                    ctk.CTkLabel(self.tabla_container, text=motivo_y_responsable, text_color="#e74c3c", wraplength=250).grid(row=idx, column=3, padx=5, pady=5)
-                    
-                    ctk.CTkLabel(self.tabla_container, text=str(cant)).grid(row=idx, column=4, padx=5, pady=5)
+                    ctk.CTkLabel(f, text=fecha_corta, width=90, anchor="w", bg_color=color_fila).pack(side="left", padx=5, pady=2)
+                    ctk.CTkLabel(f, text=cod, width=70, anchor="w", bg_color=color_fila).pack(side="left", padx=5, pady=2)
+                    ctk.CTkLabel(f, text=nom, width=180, anchor="w", wraplength=170, bg_color=color_fila).pack(side="left", padx=5, pady=2)
+                    ctk.CTkLabel(f, text=motivo_y_responsable, width=250, anchor="w", text_color="#e74c3c", wraplength=240, bg_color=color_fila).pack(side="left", padx=5, pady=2)
+                    ctk.CTkLabel(f, text=str(cant), width=50, font=("Arial", 13, "bold"), bg_color=color_fila).pack(side="left", padx=5, pady=2)
 
-                    btn_frame = ctk.CTkFrame(self.tabla_container, fg_color="transparent")
-                    btn_frame.grid(row=idx, column=5, padx=5, pady=5) # <--- Botón en column=5 (ACCIONES)
-                    ctk.CTkButton(btn_frame, text="🔄 Reactivar", width=80, fg_color="#9b59b6", hover_color="#8e44ad",
-                                  command=lambda c=cod, n=nom, s=cant: self.reactivar_equipo(c, n, s)).pack(side="left", padx=2)
+                    btn_frame = ctk.CTkFrame(f, fg_color=color_fila, bg_color=color_fila)
+                    btn_frame.pack(side="left", padx=5, pady=2) 
+                    ctk.CTkButton(btn_frame, text="🔄 Reactivar", width=80, height=24, fg_color="#9b59b6", hover_color="#8e44ad",
+                                  command=lambda c=cod, n=nom, s=cant: self.reactivar_equipo(c, n, s)).pack(pady=2)
 
                 else:
-                    # --- VISTA NORMAL (CON STOCK DETALLADO) ---
                     cod, nom, ubi, stock_tot, prestados, disponibles = it
                     
-                    ctk.CTkLabel(self.tabla_container, text=cod).grid(row=idx, column=0, padx=10, pady=5)
-                    ctk.CTkLabel(self.tabla_container, text=nom, wraplength=200).grid(row=idx, column=1, padx=10, pady=5)
-                    ctk.CTkLabel(self.tabla_container, text=ubi).grid(row=idx, column=2, padx=10, pady=5)
+                    ctk.CTkLabel(f, text=cod, width=80, anchor="w", bg_color=color_fila).pack(side="left", padx=5, pady=2)
+                    ctk.CTkLabel(f, text=nom, width=200, anchor="w", wraplength=190, bg_color=color_fila).pack(side="left", padx=5, pady=2)
+                    ctk.CTkLabel(f, text=ubi, width=120, anchor="w", bg_color=color_fila).pack(side="left", padx=5, pady=2)
                     
-                    # Celdas Numéricas
-                    ctk.CTkLabel(self.tabla_container, text=str(stock_tot)).grid(row=idx, column=3, padx=10, pady=5)
+                    ctk.CTkLabel(f, text=str(stock_tot), width=70, font=("Arial", 13, "bold"), bg_color=color_fila).pack(side="left", padx=5, pady=2)
                     
                     color_prestamo = "#e67e22" if prestados > 0 else "white"
-                    ctk.CTkLabel(self.tabla_container, text=str(prestados), text_color=color_prestamo, font=("Arial", 12, "bold")).grid(row=idx, column=4, padx=10, pady=5)
+                    ctk.CTkLabel(f, text=str(prestados), width=80, text_color=color_prestamo, font=("Arial", 13, "bold"), bg_color=color_fila).pack(side="left", padx=5, pady=2)
                     
                     color_disp = "#2ecc71" if disponibles > 0 else "#e74c3c"
-                    ctk.CTkLabel(self.tabla_container, text=str(disponibles), text_color=color_disp, font=("Arial", 12, "bold")).grid(row=idx, column=5, padx=10, pady=5)
+                    ctk.CTkLabel(f, text=str(disponibles), width=80, text_color=color_disp, font=("Arial", 13, "bold"), bg_color=color_fila).pack(side="left", padx=5, pady=2)
 
-                    btn_frame = ctk.CTkFrame(self.tabla_container, fg_color="transparent")
-                    btn_frame.grid(row=idx, column=6, padx=10, pady=5) # <--- Botón en column=6 (ACCIONES)
+                    btn_frame = ctk.CTkFrame(f, fg_color=color_fila, bg_color=color_fila)
+                    btn_frame.pack(side="left", padx=5, pady=2) 
                     
-                    # Botón Editar
-                    ctk.CTkButton(btn_frame, text="✎", width=30, fg_color="#3498db", hover_color="#2980b9",
+                    ctk.CTkButton(btn_frame, text="✎", width=30, height=24, fg_color="#3498db", hover_color="#2980b9",
                                   command=lambda a=it: self.abrir_ventana_edicion(a)).pack(side="left", padx=2)
-                    
-                    # Botón Dar de Baja
-                    ctk.CTkButton(btn_frame, text="🗑", width=30, fg_color="#e74c3c", hover_color="#c0392b",
+                    ctk.CTkButton(btn_frame, text="🗑", width=30, height=24, fg_color="#e74c3c", hover_color="#c0392b",
                                   command=lambda c=cod, n=nom, s=stock_tot: self.dar_de_baja(c, n, s)).pack(side="left", padx=2)
         except Exception as e:
             print(f"Error en actualizar_tabla_inventario: {e}")
@@ -446,7 +462,7 @@ class AppKoaLink(ctk.CTk):
         
         modal = ctk.CTkToplevel(self)
         modal.title(f"Editando: {item[0]}")
-        modal.geometry("400x500")
+        self.centrar_ventana(modal, 400, 450)
         modal.attributes("-topmost", True) # Mantener al frente
         modal.grab_set() # Bloquea la ventana principal hasta cerrar esta
 
@@ -580,12 +596,12 @@ class AppKoaLink(ctk.CTk):
         izq_frame = ctk.CTkFrame(self.main_frame, fg_color="#1d1d1d", corner_radius=15)
         izq_frame.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
 
-        ctk.CTkLabel(izq_frame, text="🔍 Buscar en Inventario Disponible", font=("Arial", 18, "bold"), text_color="#FFFA03").pack(pady=10)
+        ctk.CTkLabel(izq_frame, text="🔍 Buscar en Inventario Disponible", font=("Arial", 18, "bold"), text_color="#f1c40f").pack(pady=10)
         
         # Buscador en tiempo real
         self.ent_busqueda_p = ctk.CTkEntry(izq_frame, placeholder_text="Escriba nombre, código o categoría...")
         self.ent_busqueda_p.pack(fill="x", padx=20, pady=5)
-        self.ent_busqueda_p.bind("<KeyRelease>", lambda e: self.refrescar_tabla_prestamos())
+        self.ent_busqueda_p.bind("<KeyRelease>", lambda e: self.busqueda_inteligente(e, self.refrescar_tabla_prestamos))
 
         # Tabla de selección rápida (Scrollable)
         self.tabla_p = ctk.CTkScrollableFrame(izq_frame, fg_color="transparent")
@@ -601,18 +617,34 @@ class AppKoaLink(ctk.CTk):
         resp_frame = ctk.CTkFrame(der_frame, fg_color="transparent")
         resp_frame.pack(fill="x", pady=10, padx=10)
         
-        ctk.CTkLabel(resp_frame, text="👤 Datos del Responsable", font=("Arial", 16, "bold"), text_color="#FFFA03").pack(pady=(0,10))
+        ctk.CTkLabel(resp_frame, text="👤 Datos del Responsable", font=("Arial", 16, "bold"), text_color="#f1c40f").pack(pady=(0,10))
         
-        # Combo Tipo de Persona
-        self.combo_tipo_p = ctk.CTkComboBox(resp_frame, values=["Estudiante", "Funcionario"], width=300)
+        # --- LÓGICA INTELIGENTE DE CURSO ---
+        def al_cambiar_tipo(seleccion):
+            """Activa el campo de curso solo si es estudiante."""
+            if seleccion == "Estudiante":
+                self.ent_curso_p.configure(state="normal")
+            else:
+                self.ent_curso_p.delete(0, 'end')
+                self.ent_curso_p.configure(state="disabled")
+
+        # Combo Tipo de Persona conectado a la lógica
+        self.combo_tipo_p = ctk.CTkComboBox(resp_frame, values=["Estudiante", "Funcionario"], width=300, command=al_cambiar_tipo)
         self.combo_tipo_p.set("Estudiante") # Por defecto Estudiante
         self.combo_tipo_p.pack(pady=5)
 
         self.ent_resp_p = ctk.CTkEntry(resp_frame, placeholder_text="Nombre Completo del Responsable", width=300)
         self.ent_resp_p.pack(pady=5)
 
+        # NUEVO CAMPO: Curso
+        self.ent_curso_p = ctk.CTkEntry(resp_frame, placeholder_text="Curso (Ej: 4to Medio B)", width=300)
+        self.ent_curso_p.pack(pady=5)
+
         self.ent_dest_p = ctk.CTkEntry(resp_frame, placeholder_text="Sala o Oficina de Destino", width=300)
         self.ent_dest_p.pack(pady=5)
+
+        # Forzamos la lógica al inicio para que el campo empiece habilitado
+        al_cambiar_tipo("Estudiante")
 
         # Separador visual
         ctk.CTkFrame(der_frame, height=2, fg_color="#333333").pack(fill="x", padx=10, pady=15)
@@ -627,36 +659,38 @@ class AppKoaLink(ctk.CTk):
         self.carrito_lista = ctk.CTkScrollableFrame(carrito_frame, fg_color="#1a1a1a", height=200)
         self.carrito_lista.pack(fill="both", expand=True, padx=5, pady=5)
 
-        # Botón Final de Confirmación (usando la lógica de stock que definimos antes)
+        # Botón Final de Confirmación
         def confirmar_todo_el_prestamo():
-            resp = self.ent_resp_p.get()
-            dest = self.ent_dest_p.get()
+            resp_base = self.ent_resp_p.get().strip()
+            dest = self.ent_dest_p.get().strip()
             tipo = self.combo_tipo_p.get()
             
-            if not resp or not dest or not self.lista_items_seleccionados:
+            # MAGIA KOALINK: Empaquetar el curso si es estudiante
+            if tipo == "Estudiante":
+                curso = self.ent_curso_p.get().strip()
+                if not curso:
+                    messagebox.showwarning("Faltan Datos", "Debe ingresar el curso del estudiante.")
+                    return
+                # Nombre final para la base de datos
+                resp_final = f"{resp_base} (Curso: {curso})"
+            else:
+                resp_final = resp_base
+            
+            # Validación de campos básicos
+            if not resp_base or not dest or not self.lista_items_seleccionados:
                 messagebox.showwarning("Atención", "Complete los datos del responsable y agregue elementos al carrito.")
                 return
 
-            # LLAMADA CORREGIDA: Ahora enviamos todo el carrito de una vez
+            # Enviamos el nombre final empaquetado
             exito, msj = database.registrar_prestamo_multiple(
-                resp, dest, tipo, self.lista_items_seleccionados
+                resp_final, dest, tipo, self.lista_items_seleccionados
             )
             
             if exito:
                 messagebox.showinfo("Éxito", msj)
-                self.mostrar_prestamos() # Recargar para limpiar
+                self.mostrar_prestamos() # Recargar la vista para limpiar el carrito y formulario
             else:
                 messagebox.showerror("Error", msj)
-            
-            # Resumen final
-            mensaje_final = f"Préstamo exitoso de {exito} artículos."
-            if errors:
-                mensaje_final += "\n\nProblemas encontrados:\n" + "\n".join(errors)
-                messagebox.showwarning("Resumen", mensaje_final)
-            else:
-                messagebox.showinfo("Éxito", mensaje_final)
-                # Volvemos a cargar el módulo para limpiar todo
-                self.mostrar_prestamos()
 
         ctk.CTkButton(der_frame, text="📤 CONFIRMAR PRÉSTAMO TOTAL", 
                       fg_color="#27ae60", hover_color="#2ecc71", font=("Arial", 14, "bold"),
@@ -664,6 +698,7 @@ class AppKoaLink(ctk.CTk):
 
         # Iniciar tabla de inventario
         self.refrescar_tabla_prestamos()
+
     def editar_info_prestamo(self, id_prestamo, equipo, resp_actual, dest_actual, tipo_actual, cant, fecha):
         """Abre una ventana para editar Responsable, Destino y Tipo de un préstamo."""
         dialogo = ctk.CTkToplevel(self)
@@ -1038,7 +1073,7 @@ class AppKoaLink(ctk.CTk):
             messagebox.showerror("Error Crítico", f"Ocurrió un error al cargar la interfaz:\n{e}")
 
     def actualizar_tabla_historial(self):
-        """Refresca los datos del historial con botón para editar la información."""
+        """Refresca los datos del historial con botón de edición y Filas Cebra (UX)."""
         try:
             for w in self.tabla_historial.winfo_children(): w.destroy()
             
@@ -1046,30 +1081,38 @@ class AppKoaLink(ctk.CTk):
             categoria = self.combo_filtro_cat_historial.get()
             registros = database.obtener_historial_activos_db(termino, categoria)
 
-            # --- NUEVO ENCABEZADO DE ACCIONES ---
+            # --- ENCABEZADO DE LA TABLA ---
             h_frame = ctk.CTkFrame(self.tabla_historial, fg_color="#333333")
-            h_frame.pack(fill="x", pady=2)
-            ctk.CTkLabel(h_frame, text="ARTÍCULO", width=200, font=("Arial", 11, "bold")).pack(side="left", padx=5)
-            ctk.CTkLabel(h_frame, text="RESPONSABLE", width=180, font=("Arial", 11, "bold")).pack(side="left", padx=5)
-            ctk.CTkLabel(h_frame, text="CANT.", width=50, font=("Arial", 11, "bold")).pack(side="left", padx=5)
-            ctk.CTkLabel(h_frame, text="FECHA SALIDA", width=150, font=("Arial", 11, "bold")).pack(side="left", padx=5)
-            ctk.CTkLabel(h_frame, text="ACCIONES", width=80, font=("Arial", 11, "bold")).pack(side="left", padx=5)
+            h_frame.pack(fill="x", pady=(0, 5)) # Un ligero margen inferior para separarlo de los datos
+            ctk.CTkLabel(h_frame, text="ARTÍCULO", width=200, font=("Arial", 11, "bold")).pack(side="left", padx=5, pady=5)
+            ctk.CTkLabel(h_frame, text="RESPONSABLE", width=180, font=("Arial", 11, "bold")).pack(side="left", padx=5, pady=5)
+            ctk.CTkLabel(h_frame, text="CANT.", width=50, font=("Arial", 11, "bold")).pack(side="left", padx=5, pady=5)
+            ctk.CTkLabel(h_frame, text="FECHA SALIDA", width=150, font=("Arial", 11, "bold")).pack(side="left", padx=5, pady=5)
+            ctk.CTkLabel(h_frame, text="ACCIONES", width=80, font=("Arial", 11, "bold")).pack(side="left", padx=5, pady=5)
 
-            for reg in registros:
-                # RECIBIMOS LAS 8 VARIABLES
+            # Usamos enumerate para contar la fila actual (idx)
+            for idx, reg in enumerate(registros, start=1):
                 nom, resp, dest, tipo, cant, fecha, cod, id_prestamo = reg
                 
-                f = ctk.CTkFrame(self.tabla_historial, fg_color="#2b2b2b")
-                f.pack(fill="x", pady=1)
+                # --- MAGIA UX: CÁLCULO DE FILAS CEBRA ---
+                color_fila = "#2b2b2b" if idx % 2 == 0 else "transparent"
                 
-                ctk.CTkLabel(f, text=nom, width=200, anchor="w", wraplength=180).pack(side="left", padx=5)
-                ctk.CTkLabel(f, text=f"{resp}\n(📍 {dest})", width=180, anchor="w", font=("Arial", 10)).pack(side="left", padx=5)
-                ctk.CTkLabel(f, text=str(cant), width=50, text_color="#2ecc71", font=("Arial", 11, "bold")).pack(side="left", padx=5)
-                ctk.CTkLabel(f, text=fecha[:16], width=150, text_color="#888888").pack(side="left", padx=5)
+                # Creamos el contenedor de la fila con su respectivo color
+                f = ctk.CTkFrame(self.tabla_historial, fg_color=color_fila, corner_radius=6)
+                f.pack(fill="x", pady=2, padx=2)
+                
+                # Agregamos bg_color=color_fila a cada texto para que se fundan con el fondo
+                ctk.CTkLabel(f, text=nom, width=200, anchor="w", wraplength=180, bg_color=color_fila).pack(side="left", padx=5, pady=5)
+                ctk.CTkLabel(f, text=f"{resp}\n(📍 {dest})", width=180, anchor="w", font=("Arial", 10), bg_color=color_fila).pack(side="left", padx=5, pady=5)
+                
+                # Aumentamos el tamaño de la fuente para la cantidad (13px)
+                ctk.CTkLabel(f, text=str(cant), width=50, text_color="#2ecc71", font=("Arial", 13, "bold"), bg_color=color_fila).pack(side="left", padx=5, pady=5)
+                
+                ctk.CTkLabel(f, text=fecha[:16], width=150, text_color="#888888", bg_color=color_fila).pack(side="left", padx=5, pady=5)
                 
                 # --- BOTÓN DE EDICIÓN ---
-                btn_frame = ctk.CTkFrame(f, fg_color="transparent")
-                btn_frame.pack(side="left", padx=5)
+                btn_frame = ctk.CTkFrame(f, fg_color=color_fila, bg_color=color_fila)
+                btn_frame.pack(side="left", padx=5, pady=5)
                 ctk.CTkButton(btn_frame, text="✏️ Editar", width=70, fg_color="#f39c12", hover_color="#d35400",
                               command=lambda i=id_prestamo, n=nom, r=resp, d=dest, t=tipo, c=cant, f_date=fecha: self.editar_info_prestamo(i, n, r, d, t, c, f_date)).pack(pady=2)
 
