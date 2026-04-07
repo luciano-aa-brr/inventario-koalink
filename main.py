@@ -11,7 +11,7 @@ import os
 import socket
 import sys
 
-# Lista maestra de categorías (Actualizar solo aquí)
+# Lista de categorías (Actualizar solo aquí)
 CATEGORIAS_SISTEMA = ["Tablet", "Notebook", "PC", "Libro", "Material Didáctico", "Impresora", "Proyector"]
 
 # 1. Extrae todas las claves del diccionario (["Tablet", "Notebook", ...])
@@ -30,13 +30,13 @@ def verificar_instancia_unica():
         import tkinter as tk
         root = tk.Tk()
         root.withdraw() # Oculta la ventana principal de tkinter
-        messagebox.showerror("KoaLink - Error", "El sistema ya se encuentra abierto.")
+        messagebox.showerror("Error", "El sistema ya se encuentra abierto.")
         sys.exit() # Cierra este nuevo intento
 
 verificar_instancia_unica()
 # --- CONFIGURACIÓN GLOBAL DE TEMA ---
-# Esto obliga a la App a ser siempre oscura, ignorando el modo de Windows
-ctk.set_appearance_mode("Dark")  ## AÑADIR ESTO: Fuerza Modo Oscuro
+# Obliga a la App a ser siempre oscura, ignorando el modo de Windows
+ctk.set_appearance_mode("Dark")  #Fuerza Modo Oscuro
 # Opcionalmente, puedes setear el color de acento (blue, green, dark-blue)
 ctk.set_default_color_theme("dark-blue") ## AÑADIR ESTO: Tema de color por defecto
 
@@ -61,7 +61,7 @@ class AppKoaLink(ctk.CTk):
         super().__init__()
 
         # 1. Título y Pantalla Completa Automática
-        self.title("KoaLink - Escuela Araucanía")
+        self.title("Escuela Araucanía")
 
         # Temporizador global para búsquedas inteligentes (Debounce)
         self.timer_busqueda = None
