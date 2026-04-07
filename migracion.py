@@ -39,7 +39,7 @@ def iniciar_migracion():
             columnas = art.keys()
             
             # --- MAPEO INTELIGENTE ---
-            # Rescata el código sin importar si en la base vieja se llamaba 'codigo_barras', 'codigo' o 'id'
+            # Rescata el código si en la base vieja se llamaba 'codigo_barras', 'codigo' o 'id'
             codigo = art['codigo_barras'] if 'codigo_barras' in columnas else art['codigo'] if 'codigo' in columnas else str(art['id'])
             nombre = art['nombre'] if 'nombre' in columnas else "Sin Nombre"
             

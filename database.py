@@ -4,45 +4,39 @@ import sys
 import shutil
 from datetime import datetime, timezone, timedelta
 
+# Importar las nuevas utilidades
+from config import Config
+from utils import get_chile_time, format_chile_time, create_backup as utils_create_backup
+from constants import Constants
+from exceptions import DatabaseError
+from logger import logger
+
 # --- CONFIGURACIÓN MAESTRA DE CATEGORÍAS ---
 # Si en el futuro quieres agregar algo nuevo, SOLO lo agregas aquí.
-CATEGORIAS_PREFIJOS = {
-    "Tablet": "TAB",
-    "Notebook": "NOTE",
-    "PC": "PC",
-    "Libro": "LIB",
-    "Material Didáctico": "MAT",
-    "Impresora": "IMP",
-    "Proyector": "PROY"
-}
+CATEGORIAS_PREFIJOS = Config.CATEGORIAS_PREFIJOS
 
 def obtener_hora_chile():
     """Genera la hora exacta de Chile (UTC-3) para insertarla en la base de datos."""
-    zona_chile = timezone(timedelta(hours=-3))
-    return datetime.now(zona_chile).strftime("%Y-%m-%d %H:%M:%S")
+    return format_chile_time(get_chile_time())
 
 def crear_backup():
     """Crea una copia de seguridad de la base de datos."""
-    if not os.path.exists('backups'):
-        os.makedirs('backups')
-        
-    fecha = datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
-    ruta_db = 'data/inventario.db' # Asegúrate que esta sea la ruta correcta a tu DB
-    ruta_backup = f'backups/Respaldo_{fecha}.db'
-    
     try:
-        shutil.copy2(ruta_db, ruta_backup)
-        return True, f"Backup guardado como: Respaldo_{fecha}.db"
+        success, result = utils_create_backup(Config.DB_PATH, Config.BACKUP_DIR)
+        if success:
+            logger.info(f"Backup creado exitosamente: {result}")
+            return True, Constants.INFO_BACKUP_SUCCESS
+        else:
+            logger.error(f"Error al crear backup: {result}")
+            return False, Constants.ERROR_BACKUP_FAILED
     except Exception as e:
-        return False, f"Error al hacer backup: {e}"
+        logger.error(f"Error inesperado al crear backup: {e}")
+        return False, f"Error al crear backup: {e}"
 
-def recurso_ruta(relative_path):
-    """ Gestiona rutas para el .exe """
-    try:
-        base_path = sys._MEIPASS
-    except Exception:
-        base_path = os.path.abspath(".")
-    return os.path.join(base_path, relative_path)
+from utils import get_resource_path
+
+# Alias para compatibilidad
+recurso_ruta = get_resource_path
 
 def conectar_db():
     """Crea la carpeta data fuera del .exe y conecta a la base de datos."""

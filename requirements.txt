@@ -1,0 +1,7 @@
+customtkinter==5.2.2
+pillow==12.1.1
+reportlab==4.4.10
+python-barcode==0.16.1
+fpdf==1.7.2
+setuptools==82.0.1
+pkg_resources==0.0.0
