@@ -131,6 +131,46 @@ class AppKoaLink(ctk.CTk):
         # Cargar Dashboard al inicio
         self.mostrar_inventario()
 
+    # ==========================================
+    # --- CEREBRO DE PAGINACIÓN DE INVENTARIO ---
+    # ==========================================
+    def reset_y_actualizar_inventario(self, *args):
+        """Vuelve a la página 1 cuando el usuario busca o cambia un filtro."""
+        self.pagina_actual = 1
+        self.actualizar_tabla_inventario()
+
+    def pagina_anterior_inv(self):
+        if self.pagina_actual > 1:
+            self.pagina_actual -= 1
+            self.actualizar_tabla_inventario()
+
+    def pagina_siguiente_inv(self, total_paginas):
+        if self.pagina_actual < total_paginas:
+            self.pagina_actual += 1
+            self.actualizar_tabla_inventario()
+
+    def dibujar_controles_paginacion(self, total_paginas):
+        """Dibuja los botones al final de la pantalla."""
+        for w in self.paginacion_frame.winfo_children():
+            w.destroy()
+        
+        # Ocultar controles si no hay nada o solo 1 página
+        if total_paginas <= 1:
+            return 
+
+        btn_prev = ctk.CTkButton(self.paginacion_frame, text="< Anterior", width=100, fg_color="#34495e", hover_color="#2c3e50",
+                                 state="normal" if self.pagina_actual > 1 else "disabled",
+                                 command=self.pagina_anterior_inv)
+        btn_prev.pack(side="left", padx=20)
+
+        lbl_pag = ctk.CTkLabel(self.paginacion_frame, text=f"Página {self.pagina_actual} de {total_paginas}", font=("Arial", 14, "bold"))
+        lbl_pag.pack(side="left", expand=True)
+
+        btn_next = ctk.CTkButton(self.paginacion_frame, text="Siguiente >", width=100, fg_color="#34495e", hover_color="#2c3e50",
+                                 state="normal" if self.pagina_actual < total_paginas else "disabled",
+                                 command=lambda: self.pagina_siguiente_inv(total_paginas))
+        btn_next.pack(side="right", padx=20)
+
     def centrar_ventana(self, ventana, ancho, alto):
         """Calcula el centro de la pantalla y posiciona la ventana ahí."""
         # Obtener el ancho y alto de la pantalla del usuario
@@ -245,22 +285,26 @@ class AppKoaLink(ctk.CTk):
     def mostrar_inventario(self):
         self.limpiar_panel()
 
+        # 1. --- INICIALIZAR VARIABLES DE PAGINACIÓN (NUEVO) ---
+        self.pagina_actual = 1
+        self.items_por_pagina = 50
+
         # --- ENCABEZADO SUPERIOR (Título y Filtros) ---
         header = ctk.CTkFrame(self.main_frame, fg_color="transparent")
         header.pack(fill="x", padx=20, pady=(20, 10))
         
         ctk.CTkLabel(header, text="Gestión de Inventario", font=("Arial", 24, "bold")).pack(side="left")
         
-        # Switch para ver Inactivos (Bajas)
+        # Switch para ver Inactivos (Bajas) - CAMBIO: Llama a reset_y_actualizar_inventario
         self.ver_inactivos_var = ctk.BooleanVar(value=False)
         self.sw_inactivos = ctk.CTkSwitch(header, text="Ver Equipos de Baja (Inactivos)", 
                                           variable=self.ver_inactivos_var,
-                                          command=self.actualizar_tabla_inventario)
+                                          command=self.reset_y_actualizar_inventario)
         self.sw_inactivos.pack(side="right", padx=20)
 
-        # Filtro de Categoría
+        # Filtro de Categoría - CAMBIO: Llama a reset_y_actualizar_inventario
         self.filtro_cat = ctk.CTkComboBox(header, values=LISTA_FILTROS, 
-                                          command=lambda _: self.actualizar_tabla_inventario())
+                                          command=lambda _: self.reset_y_actualizar_inventario())
         self.filtro_cat.set("Todos")
         self.filtro_cat.pack(side="right", padx=10)
 
@@ -270,8 +314,14 @@ class AppKoaLink(ctk.CTk):
         
         self.entry_buscador = ctk.CTkEntry(f_busqueda, placeholder_text="🔍 Buscar ítem por nombre...", width=300)
         self.entry_buscador.pack(side="left")
-        # Actualiza la tabla automáticamente al soltar una tecla
-        self.entry_buscador.bind("<KeyRelease>", lambda e: self.busqueda_inteligente(e, self.actualizar_tabla_inventario))
+        
+        # CAMBIO: Usamos reset_y_actualizar_inventario para volver a la página 1 al buscar
+        self.entry_buscador.bind("<KeyRelease>", lambda e: self.busqueda_inteligente(e, self.reset_y_actualizar_inventario))
+
+        # --- CONTROLES DE PAGINACIÓN (NUEVO) ---
+        # Lo empaquetamos con side="bottom" para que quede siempre fijo en la parte inferior
+        self.paginacion_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent", height=40)
+        self.paginacion_frame.pack(side="bottom", fill="x", pady=10)
 
         # --- CONTENEDOR DE LA TABLA (Con Scroll) ---
         self.tabla_container = ctk.CTkScrollableFrame(self.main_frame, fg_color="#1d1d1d")
@@ -282,7 +332,7 @@ class AppKoaLink(ctk.CTk):
 
 
     def actualizar_tabla_inventario(self):
-        """Dibuja las filas del inventario usando la misma arquitectura visual del Historial."""
+        """Dibuja las filas del inventario con Paginación Inteligente y Vista Compacta."""
         try:
             for w in self.tabla_container.winfo_children():
                 w.destroy()
@@ -311,11 +361,26 @@ class AppKoaLink(ctk.CTk):
                 ctk.CTkLabel(h_frame, text="DISPONIBLE", width=80, font=("Arial", 11, "bold")).pack(side="left", padx=5, pady=5)
                 ctk.CTkLabel(h_frame, text="ACCIONES", width=80, font=("Arial", 11, "bold")).pack(side="left", padx=5, pady=5)
 
-            # Cargar datos
+            # =========================================================
+            # --- MAGIA KOALINK: CÁLCULOS DE PAGINACIÓN ---
+            # =========================================================
+            # Calculamos cuántos registros saltarnos (Offset)
+            offset = (self.pagina_actual - 1) * self.items_por_pagina
+
+            # Cargar datos limitados y contar el total real en la BD
             if ver_de_baja:
-                items = database.obtener_articulos_inactivos_reporte()
+                total_items = database.contar_articulos_inactivos()
+                items = database.obtener_articulos_inactivos_reporte(self.items_por_pagina, offset)
             else:
-                items = database.obtener_articulos_con_stock(texto_busqueda, categoria)
+                total_items = database.contar_articulos_con_stock(texto_busqueda, categoria)
+                items = database.obtener_articulos_con_stock(texto_busqueda, categoria, self.items_por_pagina, offset)
+
+            # Calcular cuántas páginas hay en total (mínimo 1)
+            total_paginas = max(1, (total_items + self.items_por_pagina - 1) // self.items_por_pagina)
+            
+            # Mandar a dibujar los botones de "Anterior" y "Siguiente" en la barra inferior
+            self.dibujar_controles_paginacion(total_paginas)
+            # =========================================================
 
             # --- DIBUJAR FILAS (Arquitectura de bloques del Historial) ---
             for idx, it in enumerate(items, start=1):
@@ -363,6 +428,7 @@ class AppKoaLink(ctk.CTk):
                                   command=lambda c=cod, n=nom, s=stock_tot: self.dar_de_baja(c, n, s)).pack(side="left", padx=2)
         except Exception as e:
             print(f"Error en actualizar_tabla_inventario: {e}")
+        
             
     def reactivar_equipo(self, codigo, nombre, stock_inactivo):
         
@@ -582,7 +648,6 @@ class AppKoaLink(ctk.CTk):
         self.limpiar_panel()
         
         # --- NUEVA VARIABLE: EL CARRITO DE PRÉSTAMOS ---
-        # Lista temporal para guardar los ítems seleccionados antes de confirmar
         self.lista_items_seleccionados = [] 
 
         # Diseño dividido (Grid)
@@ -619,14 +684,15 @@ class AppKoaLink(ctk.CTk):
         
         ctk.CTkLabel(resp_frame, text="👤 Datos del Responsable", font=("Arial", 16, "bold"), text_color="#f1c40f").pack(pady=(0,10))
         
-        # --- LÓGICA INTELIGENTE DE CURSO ---
+        # --- LÓGICA INTELIGENTE DE CURSO (ACTUALIZADA PARA COMBOBOX) ---
         def al_cambiar_tipo(seleccion):
-            """Activa el campo de curso solo si es estudiante."""
+            """Activa el selector de curso solo si es estudiante."""
             if seleccion == "Estudiante":
-                self.ent_curso_p.configure(state="normal")
+                self.combo_curso_p.configure(state="normal")
+                self.combo_curso_p.set("Seleccione un curso...")
             else:
-                self.ent_curso_p.delete(0, 'end')
-                self.ent_curso_p.configure(state="disabled")
+                self.combo_curso_p.set("") # Limpia el texto si es Funcionario
+                self.combo_curso_p.configure(state="disabled")
 
         # Combo Tipo de Persona conectado a la lógica
         self.combo_tipo_p = ctk.CTkComboBox(resp_frame, values=["Estudiante", "Funcionario"], width=300, command=al_cambiar_tipo)
@@ -636,9 +702,13 @@ class AppKoaLink(ctk.CTk):
         self.ent_resp_p = ctk.CTkEntry(resp_frame, placeholder_text="Nombre Completo del Responsable", width=300)
         self.ent_resp_p.pack(pady=5)
 
-        # NUEVO CAMPO: Curso
-        self.ent_curso_p = ctk.CTkEntry(resp_frame, placeholder_text="Curso (Ej: 4to Medio B)", width=300)
-        self.ent_curso_p.pack(pady=5)
+        # NUEVO CAMPO: Selector Desplegable de Cursos (1ro a 8vo)
+        lista_cursos = [
+            "1ro", "2do", "3ro", "4to", 
+            "5to", "6to", "7mo", "8vo"
+        ]
+        self.combo_curso_p = ctk.CTkComboBox(resp_frame, values=lista_cursos, width=300)
+        self.combo_curso_p.pack(pady=5)
 
         self.ent_dest_p = ctk.CTkEntry(resp_frame, placeholder_text="Sala o Oficina de Destino", width=300)
         self.ent_dest_p.pack(pady=5)
@@ -667,9 +737,11 @@ class AppKoaLink(ctk.CTk):
             
             # MAGIA KOALINK: Empaquetar el curso si es estudiante
             if tipo == "Estudiante":
-                curso = self.ent_curso_p.get().strip()
-                if not curso:
-                    messagebox.showwarning("Faltan Datos", "Debe ingresar el curso del estudiante.")
+                curso = self.combo_curso_p.get()
+                # Evitamos que guarden si dejaron el mensaje por defecto o está vacío
+                if not curso or curso == "Seleccione un curso...":
+                    from tkinter import messagebox
+                    messagebox.showwarning("Faltan Datos", "Debe seleccionar el curso del estudiante.")
                     return
                 # Nombre final para la base de datos
                 resp_final = f"{resp_base} (Curso: {curso})"
@@ -678,14 +750,16 @@ class AppKoaLink(ctk.CTk):
             
             # Validación de campos básicos
             if not resp_base or not dest or not self.lista_items_seleccionados:
+                from tkinter import messagebox
                 messagebox.showwarning("Atención", "Complete los datos del responsable y agregue elementos al carrito.")
                 return
 
-            # Enviamos el nombre final empaquetado
+            # Enviamos el nombre final empaquetado a la BD
             exito, msj = database.registrar_prestamo_multiple(
                 resp_final, dest, tipo, self.lista_items_seleccionados
             )
             
+            from tkinter import messagebox
             if exito:
                 messagebox.showinfo("Éxito", msj)
                 self.mostrar_prestamos() # Recargar la vista para limpiar el carrito y formulario
@@ -1017,8 +1091,12 @@ class AppKoaLink(ctk.CTk):
             ctk.CTkButton(f, text="X", width=25, height=20, fg_color="#c0392b", 
                           command=lambda c=item["id_detalle"]: self.quitar_de_devolucion(c)).pack(side="right", padx=5)
 
-    def quitar_de_devolucion(self, codigo):
-        self.lista_devolucion_temp = [i for i in self.lista_devolucion_temp if i["codigo"] != codigo]
+    def quitar_de_devolucion(self, id_detalle):
+        """Elimina un ítem del carrito temporal basándose en su id_detalle."""
+        # Filtramos la lista para dejar fuera el ítem que coincida con el id_detalle exacto
+        self.lista_devolucion_temp = [i for i in self.lista_devolucion_temp if i["id_detalle"] != id_detalle]
+        
+        # Volvemos a dibujar
         self.refrescar_visual_carrito_dev()
 
     def mostrar_historial_activos(self):

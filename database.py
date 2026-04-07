@@ -70,6 +70,116 @@ def conectar_db():
     
     return sqlite3.connect(ruta_db)
 
+
+# ==========================================
+# --- PAGINACIÓN: FUNCIONES DE INVENTARIO ---
+# ==========================================
+
+def contar_articulos_con_stock(busqueda="", categoria="Todos"):
+    """Cuenta el total de artículos que coinciden con la búsqueda para calcular las páginas."""
+    try:
+        conn = conectar_db()
+        cursor = conn.cursor()
+        query = '''
+            SELECT COUNT(DISTINCT a.codigo_barras)
+            FROM articulos a
+            LEFT JOIN detalle_prestamo dp ON a.codigo_barras = dp.codigo_articulo AND dp.fecha_devolucion_item IS NULL
+            WHERE a.estado != 'De Baja'
+        '''
+        params = []
+        if busqueda:
+            query += " AND (a.nombre LIKE ? OR a.codigo_barras LIKE ?)"
+            termino = f"%{busqueda}%"
+            params.extend([termino, termino])
+        if categoria != "Todos":
+            query += " AND a.categoria = ?"
+            params.append(categoria)
+            
+        cursor.execute(query, params)
+        total = cursor.fetchone()[0]
+        conn.close()
+        return total
+    except Exception as e:
+        return 0
+
+def obtener_articulos_con_stock(busqueda="", categoria="Todos", limite=50, offset=0):
+    """Obtiene un fragmento (página) específico del inventario."""
+    try:
+        conn = conectar_db()
+        cursor = conn.cursor()
+        query = '''
+            SELECT 
+                a.codigo_barras, a.nombre, a.ubicacion, a.cantidad AS stock_total,
+                COALESCE(SUM(dp.cantidad_prestada), 0) AS en_prestamo,
+                a.cantidad - COALESCE(SUM(dp.cantidad_prestada), 0) AS disponibles
+            FROM articulos a
+            LEFT JOIN detalle_prestamo dp ON a.codigo_barras = dp.codigo_articulo AND dp.fecha_devolucion_item IS NULL
+            WHERE a.estado != 'De Baja'
+        '''
+        params = []
+        if busqueda:
+            query += " AND (a.nombre LIKE ? OR a.codigo_barras LIKE ?)"
+            termino = f"%{busqueda}%"
+            params.extend([termino, termino])
+        if categoria != "Todos":
+            query += " AND a.categoria = ?"
+            params.append(categoria)
+            
+        # MAGIA AQUÍ: Agregamos LIMIT y OFFSET
+        query += " GROUP BY a.codigo_barras ORDER BY a.nombre ASC LIMIT ? OFFSET ?"
+        params.extend([limite, offset])
+        
+        cursor.execute(query, params)
+        articulos = cursor.fetchall()
+        conn.close()
+        return articulos
+    except Exception as e:
+        return []
+
+
+# ==========================================
+# --- PAGINACIÓN: FUNCIONES DE INACTIVOS ---
+# ==========================================
+
+def contar_articulos_inactivos():
+    try:
+        conn = conectar_db()
+        cursor = conn.cursor()
+        query = '''SELECT COUNT(*) FROM (
+                    SELECT b.codigo_articulo FROM bajas b
+                    GROUP BY b.codigo_articulo HAVING SUM(b.cantidad_baja) > 0
+                   )'''
+        cursor.execute(query)
+        total = cursor.fetchone()[0]
+        conn.close()
+        return total
+    except Exception:
+        return 0
+
+def obtener_articulos_inactivos_reporte(limite=50, offset=0):
+    try:
+        conn = conectar_db()
+        cursor = conn.cursor()
+        query = '''
+            SELECT 
+                b.codigo_articulo, a.nombre, 
+                (SELECT motivo FROM bajas WHERE codigo_articulo = b.codigo_articulo AND cantidad_baja > 0 ORDER BY fecha_baja DESC LIMIT 1) AS ultimo_motivo,
+                SUM(b.cantidad_baja) AS stock_en_baja, 
+                (SELECT fecha_baja FROM bajas WHERE codigo_articulo = b.codigo_articulo AND cantidad_baja > 0 ORDER BY fecha_baja DESC LIMIT 1) AS ultima_fecha
+            FROM bajas b
+            JOIN articulos a ON b.codigo_articulo = a.codigo_barras
+            GROUP BY b.codigo_articulo
+            HAVING stock_en_baja > 0
+            ORDER BY ultima_fecha DESC
+            LIMIT ? OFFSET ?
+        '''
+        cursor.execute(query, (limite, offset))
+        items = cursor.fetchall()
+        conn.close()
+        return items
+    except Exception:
+        return []
+    
 def inicializar_tablas():
     """Crea las tablas desde cero con la estructura de stock."""
     conn = conectar_db()
@@ -127,33 +237,6 @@ def inicializar_tablas():
     conn.commit()
     conn.close()
 
-def obtener_articulos_inactivos_reporte():
-    """Trae las bajas agrupadas matemáticamente, mostrando el motivo exacto declarado."""
-    try:
-        conn = conectar_db()
-        cursor = conn.cursor()
-        
-        # Ahora el responsable real viene escrito dentro de "ultimo_motivo"
-        query = '''
-            SELECT 
-                b.codigo_articulo, 
-                a.nombre, 
-                (SELECT motivo FROM bajas WHERE codigo_articulo = b.codigo_articulo AND cantidad_baja > 0 ORDER BY fecha_baja DESC LIMIT 1) AS ultimo_motivo,
-                SUM(b.cantidad_baja) AS stock_en_baja, 
-                (SELECT fecha_baja FROM bajas WHERE codigo_articulo = b.codigo_articulo AND cantidad_baja > 0 ORDER BY fecha_baja DESC LIMIT 1) AS ultima_fecha
-            FROM bajas b
-            JOIN articulos a ON b.codigo_articulo = a.codigo_barras
-            GROUP BY b.codigo_articulo
-            HAVING stock_en_baja > 0
-            ORDER BY ultima_fecha DESC
-        '''
-        cursor.execute(query)
-        items = cursor.fetchall()
-        conn.close()
-        return items
-    except Exception as e:
-        print(f"Error en consulta de inactivos: {e}")
-        return []
 
 def obtener_articulo_por_codigo(codigo):
     conn = conectar_db()
@@ -280,47 +363,7 @@ def obtener_articulos_inventario_completo(categoria="Todos", mostrar_inactivos=F
     conn.close()
     return items
 
-def obtener_articulos_con_stock(busqueda="", categoria="Todos"):
-    """
-    Obtiene los artículos calculando el stock total real (Disponibles + Prestados).
-    """
-    conn = conectar_db()
-    cursor = conn.cursor()
-    
-    # NUEVA MATEMÁTICA:
-    # a.cantidad = Es lo que realmente hay en la bodega (Disponibles)
-    # COUNT(...) = Es lo que está fuera de la bodega (En Préstamo)
-    # Stock Total = a.cantidad + COUNT(...)
-    
-    query = '''
-        SELECT 
-            a.codigo_barras, 
-            a.nombre, 
-            a.ubicacion, 
-            (a.cantidad + COUNT(dp.codigo_articulo)) AS stock_total,
-            COUNT(dp.codigo_articulo) AS en_prestamo,
-            a.cantidad AS disponibles
-        FROM articulos a
-        LEFT JOIN detalle_prestamo dp ON a.codigo_barras = dp.codigo_articulo AND dp.fecha_devolucion_item IS NULL
-        WHERE a.nombre LIKE ? AND a.estado != 'Inactivo'
-    '''
-    params = [f"%{busqueda}%"]
-    
-    if categoria != "Todos":
-        query += " AND a.categoria = ?"
-        params.append(categoria)
-        
-    query += " GROUP BY a.codigo_barras"
-    
-    try:
-        cursor.execute(query, params)
-        items = cursor.fetchall()
-    except Exception as e:
-        print(f"Error SQL en obtener_articulos_con_stock: {e}")
-        items = []
-        
-    conn.close()
-    return items
+
     
 def dar_de_baja_db(codigo, cantidad_baja, motivo="Baja de Inventario"):
     try:
