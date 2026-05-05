@@ -253,3 +253,115 @@ class PrestamosModule(ctk.CTkFrame):
         """Elimina un artículo del carrito de préstamo."""
         self.lista_items_seleccionados = [i for i in self.lista_items_seleccionados if i["codigo"] != codigo]
         self.refrescar_visual_del_carrito()
+
+    def show_prestamos_libros(self):
+        """Muestra una interfaz para prestar copias individuales de libros por número de serie."""
+        self.clear()
+        
+        header = ctk.CTkFrame(self, fg_color="transparent")
+        header.pack(fill="x", padx=20, pady=(20, 10))
+        
+        ctk.CTkLabel(header, text="📚 Prestar Copia de Libro (Por Número de Serie)", font=("Arial", 22, "bold"), text_color="#f1c40f").pack(side="left")
+        
+        # Frame de búsqueda
+        search_frame = ctk.CTkFrame(self, fg_color="transparent")
+        search_frame.pack(fill="x", padx=20, pady=(0, 10))
+        
+        ctk.CTkLabel(search_frame, text="Número de Serie:", font=("Arial", 12)).pack(side="left", padx=(0, 10))
+        ent_serie = ctk.CTkEntry(search_frame, placeholder_text="Ej: LIB-001-01", width=200)
+        ent_serie.pack(side="left", padx=5)
+        
+        info_frame = ctk.CTkFrame(self, fg_color="#1d1d1d", corner_radius=8)
+        info_frame.pack(fill="both", expand=False, padx=20, pady=10)
+        
+        label_info = ctk.CTkLabel(info_frame, text="Ingrese un número de serie y presione Enter para buscar...", text_color="#aaaaaa", font=("Arial", 11))
+        label_info.pack(padx=15, pady=15)
+        
+        # Frame para datos del responsable
+        datos_frame = ctk.CTkFrame(self, fg_color="transparent")
+        datos_frame.pack(fill="x", padx=20, pady=10)
+        
+        ctk.CTkLabel(datos_frame, text="👤 Datos del Responsable", font=("Arial", 14, "bold"), text_color="#f1c40f").pack(anchor="w", pady=(0, 10))
+        
+        ctk.CTkLabel(datos_frame, text="Tipo de Usuario:").pack(anchor="w", pady=(5, 0))
+        combo_tipo = ctk.CTkComboBox(datos_frame, values=["Estudiante", "Funcionario"], width=300)
+        combo_tipo.set("Estudiante")
+        combo_tipo.pack(anchor="w", pady=5)
+        
+        ctk.CTkLabel(datos_frame, text="Nombre Completo:").pack(anchor="w", pady=(5, 0))
+        ent_responsable = ctk.CTkEntry(datos_frame, width=300)
+        ent_responsable.pack(anchor="w", pady=5)
+        
+        ctk.CTkLabel(datos_frame, text="Sala / Oficina de Destino:").pack(anchor="w", pady=(5, 0))
+        ent_destino = ctk.CTkEntry(datos_frame, width=300)
+        ent_destino.pack(anchor="w", pady=5)
+        
+        # Frame de botones
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=20, pady=20)
+        
+        btn_prestar = ctk.CTkButton(btn_frame, text="📤 PRESTAR COPIA", fg_color="#27ae60", hover_color="#2ecc71", state="disabled", font=("Arial", 13, "bold"), height=40)
+        btn_prestar.pack(side="left", padx=5, fill="x", expand=True)
+        
+        btn_limpiar = ctk.CTkButton(btn_frame, text="Limpiar", fg_color="#34495e", hover_color="#2c3e50", font=("Arial", 12))
+        btn_limpiar.pack(side="left", padx=5)
+        
+        def buscar_copia(*args):
+            numero_serie = ent_serie.get().strip()
+            if not numero_serie:
+                label_info.configure(text="Ingrese un número de serie...")
+                btn_prestar.configure(state="disabled")
+                return
+            
+            info = database.buscar_copia_por_numero_serie_db(numero_serie)
+            if info['encontrado']:
+                estado = info['estado']
+                nombre_libro = info['nombre_libro']
+                responsable_actual = info['responsable']
+                estado_color = "#2ecc71" if estado == "Disponible" else "#e67e22"
+                
+                texto_info = f"✓ Libro: {nombre_libro}\n"
+                texto_info += f"  Estado: {estado}\n"
+                texto_info += f"  Autor: {info['autor']}\n"
+                if estado == "Prestado":
+                    texto_info += f"  Actualmente con: {responsable_actual}\n"
+                    btn_prestar.configure(state="disabled")
+                    label_info.configure(text=texto_info, text_color="#e67e22")
+                else:
+                    btn_prestar.configure(state="normal")
+                    label_info.configure(text=texto_info, text_color=estado_color)
+            else:
+                label_info.configure(text=f"✗ Número de serie '{numero_serie}' no encontrado", text_color="#e74c3c")
+                btn_prestar.configure(state="disabled")
+        
+        def prestar():
+            numero_serie = ent_serie.get().strip()
+            responsable = ent_responsable.get().strip()
+            destino = ent_destino.get().strip()
+            tipo = combo_tipo.get()
+            
+            if not numero_serie or not responsable or not destino:
+                messagebox.showwarning("Faltan Datos", "Complete todos los campos requeridos.")
+                return
+            
+            exito, mensaje = database.prestar_copia_libro_db(numero_serie, responsable, destino, tipo)
+            if exito:
+                messagebox.showinfo("Éxito", f"{mensaje}\n\nCopia: {numero_serie}\nResponsable: {responsable}")
+                ent_serie.delete(0, "end")
+                ent_responsable.delete(0, "end")
+                ent_destino.delete(0, "end")
+                label_info.configure(text="Ingrese un número de serie y presione Enter para buscar...", text_color="#aaaaaa")
+                btn_prestar.configure(state="disabled")
+            else:
+                messagebox.showerror("Error", mensaje)
+        
+        def limpiar():
+            ent_serie.delete(0, "end")
+            ent_responsable.delete(0, "end")
+            ent_destino.delete(0, "end")
+            label_info.configure(text="Ingrese un número de serie y presione Enter para buscar...", text_color="#aaaaaa")
+            btn_prestar.configure(state="disabled")
+        
+        ent_serie.bind("<Return>", buscar_copia)
+        btn_prestar.configure(command=prestar)
+        btn_limpiar.configure(command=limpiar)

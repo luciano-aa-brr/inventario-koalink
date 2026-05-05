@@ -355,7 +355,7 @@ Este proyecto es software propietario desarrollado para uso educativo interno.
 
 ---
 
-*Desarrollado con ❤️ para la gestión eficiente de inventario escolar*
+*Desarrollado con cariño para la gestión eficiente de inventario escolar*
 
 ### Agregar Nuevas Categorías
 

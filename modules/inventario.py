@@ -510,3 +510,226 @@ class InventarioModule(ctk.CTkFrame):
         if opciones_cat:
             combo_cat.set(opciones_cat[0])
             al_cambiar_categoria(opciones_cat[0])
+
+    def show_libros(self):
+        """Muestra la vista de gestión de libros con copias individuales."""
+        self.clear()
+        
+        header = ctk.CTkFrame(self, fg_color="transparent")
+        header.pack(fill="x", padx=20, pady=(20, 10))
+        
+        ctk.CTkLabel(header, text="📚 Gestión de Libros (Copias Individuales)", font=("Arial", 24, "bold")).pack(side="left")
+        
+        f_busqueda = ctk.CTkFrame(self, fg_color="transparent")
+        f_busqueda.pack(fill="x", padx=20, pady=(0, 10))
+        
+        ent_busqueda = ctk.CTkEntry(f_busqueda, placeholder_text="🔍 Buscar por título, código o autor...", width=400)
+        ent_busqueda.pack(side="left", padx=5)
+        
+        btn_agregar = ctk.CTkButton(f_busqueda, text="➕ Agregar Nuevo Libro", fg_color="#27ae60", command=self.show_alta_libro, width=150)
+        btn_agregar.pack(side="right", padx=5)
+        
+        tabla_frame = ctk.CTkScrollableFrame(self, fg_color="#1d1d1d")
+        tabla_frame.pack(fill="both", expand=True, padx=20, pady=10)
+        
+        def actualizar_tabla_libros(busqueda=""):
+            for w in tabla_frame.winfo_children():
+                w.destroy()
+            
+            libros = database.obtener_libros_db(busqueda)
+            
+            if not libros:
+                ctk.CTkLabel(tabla_frame, text="No hay libros registrados", text_color="#888888").pack(pady=20)
+                return
+            
+            # Encabezado
+            h_frame = ctk.CTkFrame(tabla_frame, fg_color="#333333")
+            h_frame.pack(fill="x", pady=(0, 5))
+            
+            ctk.CTkLabel(h_frame, text="CÓDIGO", width=80, anchor="w", font=("Arial", 11, "bold")).pack(side="left", padx=5, pady=5)
+            ctk.CTkLabel(h_frame, text="TÍTULO", width=220, anchor="w", font=("Arial", 11, "bold")).pack(side="left", padx=5, pady=5)
+            ctk.CTkLabel(h_frame, text="AUTOR", width=150, anchor="w", font=("Arial", 11, "bold")).pack(side="left", padx=5, pady=5)
+            ctk.CTkLabel(h_frame, text="TOTAL", width=60, font=("Arial", 11, "bold")).pack(side="left", padx=5, pady=5)
+            ctk.CTkLabel(h_frame, text="DISPONIBLES", width=80, font=("Arial", 11, "bold")).pack(side="left", padx=5, pady=5)
+            ctk.CTkLabel(h_frame, text="PRESTADAS", width=80, font=("Arial", 11, "bold")).pack(side="left", padx=5, pady=5)
+            ctk.CTkLabel(h_frame, text="ACCIONES", width=100, font=("Arial", 11, "bold")).pack(side="left", padx=5, pady=5)
+            
+            for idx, libro in enumerate(libros, start=1):
+                cod_libro, nombre, autor, total_copias, disponibles, prestadas = libro
+                
+                color_fila = "#2b2b2b" if idx % 2 == 0 else "transparent"
+                f = ctk.CTkFrame(tabla_frame, fg_color=color_fila, corner_radius=4)
+                f.pack(fill="x", pady=1, padx=2)
+                
+                ctk.CTkLabel(f, text=cod_libro, width=80, anchor="w", bg_color=color_fila).pack(side="left", padx=5, pady=2)
+                ctk.CTkLabel(f, text=nombre[:30], width=220, anchor="w", wraplength=210, bg_color=color_fila).pack(side="left", padx=5, pady=2)
+                ctk.CTkLabel(f, text=autor[:20] if autor else "N/A", width=150, anchor="w", wraplength=140, bg_color=color_fila).pack(side="left", padx=5, pady=2)
+                ctk.CTkLabel(f, text=str(total_copias or 0), width=60, font=("Arial", 12, "bold"), bg_color=color_fila).pack(side="left", padx=5, pady=2)
+                
+                color_disp = "#2ecc71" if (disponibles or 0) > 0 else "#e74c3c"
+                ctk.CTkLabel(f, text=str(disponibles or 0), width=80, text_color=color_disp, font=("Arial", 12, "bold"), bg_color=color_fila).pack(side="left", padx=5, pady=2)
+                
+                color_prest = "#e67e22" if (prestadas or 0) > 0 else "white"
+                ctk.CTkLabel(f, text=str(prestadas or 0), width=80, text_color=color_prest, font=("Arial", 12, "bold"), bg_color=color_fila).pack(side="left", padx=5, pady=2)
+                
+                btn_frame = ctk.CTkFrame(f, fg_color=color_fila, bg_color=color_fila)
+                btn_frame.pack(side="left", padx=5, pady=2)
+                
+                ctk.CTkButton(
+                    btn_frame,
+                    text="📖",
+                    width=30,
+                    height=24,
+                    fg_color="#3498db",
+                    hover_color="#2980b9",
+                    command=lambda c=cod_libro, n=nombre: self.ver_copias_libro(c, n)
+                ).pack(side="left", padx=2)
+                
+                ctk.CTkButton(
+                    btn_frame,
+                    text="➕",
+                    width=30,
+                    height=24,
+                    fg_color="#27ae60",
+                    hover_color="#229954",
+                    command=lambda c=cod_libro, n=nombre: self.agregar_copias_libro(c, n)
+                ).pack(side="left", padx=2)
+        
+        def al_escribir_busqueda(*args):
+            actualizar_tabla_libros(ent_busqueda.get())
+        
+        ent_busqueda.bind("<KeyRelease>", al_escribir_busqueda)
+        actualizar_tabla_libros()
+    
+    def ver_copias_libro(self, codigo_libro, nombre_libro):
+        """Muestra un modal con todas las copias de un libro."""
+        modal = ctk.CTkToplevel(self)
+        modal.title(f"Copias de: {nombre_libro}")
+        center_window(modal, 900, 500)
+        modal.grab_set()
+        
+        ctk.CTkLabel(modal, text=f"📚 Copias de '{nombre_libro}'", font=("Arial", 18, "bold"), text_color="#f1c40f").pack(pady=10)
+        
+        tabla = ctk.CTkScrollableFrame(modal, fg_color="#1d1d1d")
+        tabla.pack(fill="both", expand=True, padx=20, pady=10)
+        
+        # Encabezado
+        h_frame = ctk.CTkFrame(tabla, fg_color="#333333")
+        h_frame.pack(fill="x", pady=(0, 5))
+        
+        ctk.CTkLabel(h_frame, text="NÚMERO DE SERIE", width=150, anchor="w", font=("Arial", 11, "bold")).pack(side="left", padx=5, pady=5)
+        ctk.CTkLabel(h_frame, text="ESTADO", width=100, anchor="w", font=("Arial", 11, "bold")).pack(side="left", padx=5, pady=5)
+        ctk.CTkLabel(h_frame, text="RESPONSABLE", width=200, anchor="w", font=("Arial", 11, "bold")).pack(side="left", padx=5, pady=5)
+        ctk.CTkLabel(h_frame, text="FECHA PRÉSTAMO", width=150, anchor="w", font=("Arial", 11, "bold")).pack(side="left", padx=5, pady=5)
+        
+        copias = database.obtener_copias_libro_db(codigo_libro)
+        
+        if not copias:
+            ctk.CTkLabel(tabla, text="No hay copias registradas", text_color="#888888").pack(pady=20)
+        else:
+            for idx, copia in enumerate(copias, start=1):
+                numero_serie, estado, responsable, fecha_prestamo = copia
+                
+                color_fila = "#2b2b2b" if idx % 2 == 0 else "transparent"
+                f = ctk.CTkFrame(tabla, fg_color=color_fila, corner_radius=4)
+                f.pack(fill="x", pady=1, padx=2)
+                
+                color_estado = "#2ecc71" if estado == "Disponible" else "#e67e22"
+                ctk.CTkLabel(f, text=numero_serie, width=150, anchor="w", text_color="#3498db", font=("Arial", 11, "bold"), bg_color=color_fila).pack(side="left", padx=5, pady=2)
+                ctk.CTkLabel(f, text=estado, width=100, anchor="w", text_color=color_estado, font=("Arial", 11, "bold"), bg_color=color_fila).pack(side="left", padx=5, pady=2)
+                ctk.CTkLabel(f, text=responsable, width=200, anchor="w", bg_color=color_fila).pack(side="left", padx=5, pady=2)
+                ctk.CTkLabel(f, text=str(fecha_prestamo)[:10] if fecha_prestamo != "N/A" else "N/A", width=150, anchor="w", bg_color=color_fila).pack(side="left", padx=5, pady=2)
+    
+    def agregar_copias_libro(self, codigo_libro, nombre_libro):
+        """Abre un diálogo para agregar más copias a un libro."""
+        dialogo = ctk.CTkInputDialog(
+            text=f"¿Cuántas copias adicionales desea agregar a '{nombre_libro}'?",
+            title="Agregar Copias"
+        )
+        cantidad = dialogo.get_input()
+        
+        if not cantidad:
+            return
+        
+        try:
+            cantidad = int(cantidad)
+            if cantidad <= 0:
+                messagebox.showerror("Error", "La cantidad debe ser mayor que 0.")
+                return
+            
+            exito, mensaje, nuevas_copias = database.agregar_copias_libro_db(codigo_libro, cantidad)
+            if exito:
+                messagebox.showinfo("Éxito", f"{mensaje}\n\nNuevos números de serie:\n{', '.join(nuevas_copias)}")
+                self.show_libros()
+            else:
+                messagebox.showerror("Error", mensaje)
+        except ValueError:
+            messagebox.showerror("Error", "Ingrese un número válido.")
+    
+    def show_alta_libro(self):
+        """Muestra el formulario para registrar un nuevo libro."""
+        self.clear()
+        
+        ctk.CTkLabel(self, text="📖 Registrar Nuevo Libro", font=("Arial", 26, "bold"), text_color="#f1c40f").pack(pady=(30, 20))
+        
+        form_frame = ctk.CTkFrame(self, fg_color="transparent")
+        form_frame.pack(pady=10, padx=50)
+        
+        # Código
+        ctk.CTkLabel(form_frame, text="Código del Libro:").grid(row=0, column=0, padx=20, pady=15, sticky="e")
+        ent_cod = ctk.CTkEntry(form_frame, width=350)
+        cod_autogenerado = database.generar_codigo_libro("Libro")
+        ent_cod.insert(0, cod_autogenerado)
+        ent_cod.grid(row=0, column=1)
+        
+        # Título
+        ctk.CTkLabel(form_frame, text="Título del Libro:").grid(row=1, column=0, padx=20, pady=15, sticky="e")
+        ent_titulo = ctk.CTkEntry(form_frame, width=350)
+        ent_titulo.grid(row=1, column=1)
+        
+        # Autor
+        ctk.CTkLabel(form_frame, text="Autor:").grid(row=2, column=0, padx=20, pady=15, sticky="e")
+        ent_autor = ctk.CTkEntry(form_frame, width=350)
+        ent_autor.grid(row=2, column=1)
+        
+        # Ubicación
+        ctk.CTkLabel(form_frame, text="Estante / Ubicación:").grid(row=3, column=0, padx=20, pady=15, sticky="e")
+        ent_ubicacion = ctk.CTkEntry(form_frame, placeholder_text="Ej: Estante A-1", width=350)
+        ent_ubicacion.grid(row=3, column=1)
+        
+        # Cantidad de copias
+        ctk.CTkLabel(form_frame, text="Cantidad de Copias:").grid(row=4, column=0, padx=20, pady=15, sticky="e")
+        ent_cantidad = ctk.CTkEntry(form_frame, width=350)
+        ent_cantidad.insert(0, "1")
+        ent_cantidad.grid(row=4, column=1)
+        
+        def guardar():
+            codigo = ent_cod.get().strip()
+            titulo = ent_titulo.get().strip()
+            autor = ent_autor.get().strip()
+            ubicacion = ent_ubicacion.get().strip() or "Bodega"
+            
+            try:
+                cantidad = int(ent_cantidad.get())
+                if cantidad <= 0:
+                    messagebox.showerror("Error", "La cantidad debe ser mayor que 0.")
+                    return
+            except ValueError:
+                messagebox.showerror("Error", "La cantidad debe ser un número válido.")
+                return
+            
+            if not codigo or not titulo:
+                messagebox.showerror("Error", "Código y Título son obligatorios.")
+                return
+            
+            exito, mensaje = database.registrar_libro_db(codigo, titulo, autor, ubicacion, cantidad)
+            if exito:
+                messagebox.showinfo("Éxito", mensaje)
+                self.show_libros()
+            else:
+                messagebox.showerror("Error", mensaje)
+        
+        ctk.CTkButton(self, text="💾 GUARDAR LIBRO", command=guardar, fg_color="#27ae60", font=("Arial", 14, "bold")).pack(pady=40)
+        
+        btn_volver = ctk.CTkButton(self, text="← Volver a Libros", command=self.show_libros, fg_color="#34495e")
+        btn_volver.pack(pady=10)

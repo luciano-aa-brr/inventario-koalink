@@ -6,7 +6,7 @@ import os
 import socket
 import sys
 
-# Importar las nuevas utilidades
+# nuevas importaciones de utilidades y configuración
 from config import Config
 from utils import center_window, get_resource_path
 from constants import Constants
@@ -32,8 +32,8 @@ verificar_instancia_unica()
 # --- CONFIGURACIÓN GLOBAL DE TEMA ---
 # Obliga a la App a ser siempre oscura, ignorando el modo de Windows
 ctk.set_appearance_mode(Config.THEME_MODE)  # Fuerza Modo Oscuro
-# Opcionalmente, puedes setear el color de acento (blue, green, dark-blue)
-ctk.set_default_color_theme(Config.THEME_COLOR)  ## AÑADIR ESTO: Tema de color por defecto
+
+ctk.set_default_color_theme(Config.THEME_COLOR)  
 
 # Configuración de colores
 COLOR_AMARILLO = Config.ACCENT_COLOR

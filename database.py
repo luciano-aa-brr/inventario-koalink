@@ -228,6 +228,47 @@ def inicializar_tablas():
             FOREIGN KEY(codigo_articulo) REFERENCES articulos(codigo_barras)
         )
     ''')
+
+    # ============ NUEVAS TABLAS PARA LIBROS CON IDENTIFICACIÓN INDIVIDUAL ============
+    
+    # Tabla de Libros (títulos/códigos de libros)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS libros (
+            codigo_libro TEXT PRIMARY KEY,
+            nombre TEXT NOT NULL,
+            autor TEXT,
+            categoria TEXT DEFAULT 'Libro',
+            ubicacion TEXT,
+            fecha_registro DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    # Tabla de Copias de Libros (cada copia física con número de serie único)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS copias_libro (
+            numero_serie TEXT PRIMARY KEY,
+            codigo_libro TEXT NOT NULL,
+            estado TEXT DEFAULT 'Disponible',
+            fecha_adquisicion DATETIME DEFAULT CURRENT_TIMESTAMP,
+            observaciones TEXT,
+            FOREIGN KEY(codigo_libro) REFERENCES libros(codigo_libro)
+        )
+    ''')
+
+    # Tabla de Préstamos de Copias Individuales
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS prestamos_libro (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            numero_serie TEXT NOT NULL,
+            responsable TEXT NOT NULL,
+            destino TEXT,
+            tipo_usuario TEXT,
+            fecha_salida DATETIME DEFAULT CURRENT_TIMESTAMP,
+            fecha_devolucion DATETIME,
+            FOREIGN KEY(numero_serie) REFERENCES copias_libro(numero_serie)
+        )
+    ''')
+
     conn.commit()
     conn.close()
 
@@ -262,11 +303,13 @@ def contar_stock_critico():
     return res if res else 0
 
 def guardar_item_db(codigo, nombre, categoria, ubicacion, cantidad):
+
     """
     Registra un item. 
     Si el código ya existe (como en libros), suma la cantidad al stock.
     Si es nuevo, lo crea.
     """
+    
     try:
         conn = conectar_db()
         cursor = conn.cursor()
@@ -635,3 +678,375 @@ def actualizar_info_prestamo_db(id_prestamo, nuevo_resp, nuevo_dest, nuevo_tipo)
         return True, "Información del préstamo actualizada."
     except Exception as e:
         return False, str(e)
+
+
+# ========== FUNCIONES PARA LIBROS CON IDENTIFICACIÓN INDIVIDUAL ==========
+
+def generar_codigo_libro(categoria="Libro"):
+    """Genera un código único para un nuevo libro (título)."""
+    prefijo = CATEGORIAS_PREFIJOS.get(categoria, "LIB")
+    conn = conectar_db()
+    cursor = conn.cursor()
+    
+    cursor.execute(f"SELECT codigo_libro FROM libros WHERE codigo_libro LIKE '{prefijo}-%' ORDER BY codigo_libro DESC LIMIT 1")
+    ultimo = cursor.fetchone()
+    conn.close()
+    
+    if ultimo:
+        ultimo_num = int(ultimo[0].split("-")[1])
+        nuevo_num = ultimo_num + 1
+    else:
+        nuevo_num = 1
+    
+    return f"{prefijo}-{nuevo_num:03d}"
+
+
+def registrar_libro_db(codigo_libro, nombre, autor, ubicacion, cantidad_copias):
+    """
+    Registra un nuevo libro (título) y crea automáticamente sus copias con números de serie.
+    
+    Args:
+        codigo_libro: Código del libro (ej: LIB-001)
+        nombre: Nombre/título del libro
+        autor: Autor del libro
+        ubicacion: Ubicación física
+        cantidad_copias: Cantidad de copias a registrar
+    
+    Returns:
+        (success: bool, message: str)
+    """
+    try:
+        conn = conectar_db()
+        cursor = conn.cursor()
+        
+        # 1. Verificar si el libro ya existe
+        cursor.execute("SELECT codigo_libro FROM libros WHERE codigo_libro = ?", (codigo_libro,))
+        if cursor.fetchone():
+            conn.close()
+            return False, f"El código {codigo_libro} ya está registrado."
+        
+        # 2. Registrar el libro (título)
+        hora_exacta = obtener_hora_chile()
+        cursor.execute('''INSERT INTO libros (codigo_libro, nombre, autor, ubicacion, fecha_registro) 
+                          VALUES (?, ?, ?, ?, ?)''', 
+                       (codigo_libro, nombre, autor, ubicacion, hora_exacta))
+        
+        # 3. Crear las copias individuales con números de serie
+        copias_creadas = []
+        for i in range(1, cantidad_copias + 1):
+            numero_serie = f"{codigo_libro}-{i:02d}"
+            cursor.execute('''INSERT INTO copias_libro (numero_serie, codigo_libro, fecha_adquisicion) 
+                              VALUES (?, ?, ?)''', 
+                           (numero_serie, codigo_libro, hora_exacta))
+            copias_creadas.append(numero_serie)
+        
+        conn.commit()
+        conn.close()
+        
+        return True, f"Libro '{nombre}' registrado con {cantidad_copias} copias.\nNúmeros de serie: {', '.join(copias_creadas)}"
+    except Exception as e:
+        return False, f"Error al registrar libro: {e}"
+
+
+def agregar_copias_libro_db(codigo_libro, cantidad_nuevas):
+    """
+    Agrega más copias a un libro existente.
+    
+    Args:
+        codigo_libro: Código del libro
+        cantidad_nuevas: Cantidad de copias a agregar
+    
+    Returns:
+        (success: bool, message: str, copias_nuevas: list)
+    """
+    try:
+        conn = conectar_db()
+        cursor = conn.cursor()
+        
+        # 1. Verificar que el libro existe
+        cursor.execute("SELECT nombre FROM libros WHERE codigo_libro = ?", (codigo_libro,))
+        resultado = cursor.fetchone()
+        if not resultado:
+            conn.close()
+            return False, f"El libro con código {codigo_libro} no existe.", []
+        
+        nombre_libro = resultado[0]
+        
+        # 2. Obtener el siguiente número de serie
+        cursor.execute("SELECT numero_serie FROM copias_libro WHERE codigo_libro = ? ORDER BY numero_serie DESC LIMIT 1", 
+                       (codigo_libro,))
+        ultima_copia = cursor.fetchone()
+        
+        if ultima_copia:
+            ultimo_num = int(ultima_copia[0].split("-")[-1])
+            siguiente_num = ultimo_num + 1
+        else:
+            siguiente_num = 1
+        
+        # 3. Crear las nuevas copias
+        hora_exacta = obtener_hora_chile()
+        copias_nuevas = []
+        
+        for i in range(siguiente_num, siguiente_num + cantidad_nuevas):
+            numero_serie = f"{codigo_libro}-{i:02d}"
+            cursor.execute('''INSERT INTO copias_libro (numero_serie, codigo_libro, fecha_adquisicion) 
+                              VALUES (?, ?, ?)''', 
+                           (numero_serie, codigo_libro, hora_exacta))
+            copias_nuevas.append(numero_serie)
+        
+        conn.commit()
+        conn.close()
+        
+        return True, f"Se agregaron {cantidad_nuevas} copias a '{nombre_libro}'.", copias_nuevas
+    except Exception as e:
+        return False, f"Error al agregar copias: {e}", []
+
+
+def obtener_copias_libro_db(codigo_libro):
+    """
+    Obtiene todas las copias de un libro con su estado.
+    
+    Returns:
+        list: [(numero_serie, estado, responsable_actual, fecha_prestamo), ...]
+    """
+    try:
+        conn = conectar_db()
+        cursor = conn.cursor()
+        
+        query = '''
+            SELECT 
+                cl.numero_serie,
+                cl.estado,
+                COALESCE(pl.responsable, 'Sin préstamo') as responsable,
+                COALESCE(pl.fecha_salida, 'N/A') as fecha_prestamo
+            FROM copias_libro cl
+            LEFT JOIN prestamos_libro pl ON cl.numero_serie = pl.numero_serie AND pl.fecha_devolucion IS NULL
+            WHERE cl.codigo_libro = ?
+            ORDER BY cl.numero_serie
+        '''
+        
+        cursor.execute(query, (codigo_libro,))
+        copias = cursor.fetchall()
+        conn.close()
+        
+        return copias
+    except Exception as e:
+        logger.error(f"Error obteniendo copias: {e}")
+        return []
+
+
+def obtener_libros_db(busqueda=""):
+    """
+    Obtiene todos los libros con resumen de copias.
+    
+    Returns:
+        list: [(codigo_libro, nombre, autor, total_copias, disponibles, prestadas), ...]
+    """
+    try:
+        conn = conectar_db()
+        cursor = conn.cursor()
+        
+        query = '''
+            SELECT 
+                l.codigo_libro,
+                l.nombre,
+                l.autor,
+                COUNT(cl.numero_serie) as total_copias,
+                SUM(CASE WHEN cl.estado = 'Disponible' THEN 1 ELSE 0 END) as disponibles,
+                SUM(CASE WHEN cl.estado = 'Prestado' THEN 1 ELSE 0 END) as prestadas
+            FROM libros l
+            LEFT JOIN copias_libro cl ON l.codigo_libro = cl.codigo_libro
+        '''
+        
+        params = []
+        if busqueda:
+            query += " WHERE l.nombre LIKE ? OR l.codigo_libro LIKE ? OR l.autor LIKE ?"
+            termino = f"%{busqueda}%"
+            params = [termino, termino, termino]
+        
+        query += " GROUP BY l.codigo_libro ORDER BY l.nombre"
+        
+        cursor.execute(query, params)
+        libros = cursor.fetchall()
+        conn.close()
+        
+        return libros
+    except Exception as e:
+        logger.error(f"Error obteniendo libros: {e}")
+        return []
+
+
+def prestar_copia_libro_db(numero_serie, responsable, destino, tipo_usuario):
+    """
+    Registra el préstamo de una copia específica de un libro.
+    
+    Args:
+        numero_serie: Número de serie de la copia (ej: LIB-001-01)
+        responsable: Nombre de quien recibe el libro
+        destino: Lugar de destino
+        tipo_usuario: 'Estudiante' o 'Funcionario'
+    
+    Returns:
+        (success: bool, message: str)
+    """
+    try:
+        conn = conectar_db()
+        cursor = conn.cursor()
+        
+        # 1. Verificar que la copia existe y está disponible
+        cursor.execute("SELECT estado, codigo_libro FROM copias_libro WHERE numero_serie = ?", (numero_serie,))
+        resultado = cursor.fetchone()
+        
+        if not resultado:
+            conn.close()
+            return False, f"La copia {numero_serie} no existe."
+        
+        estado, codigo_libro = resultado
+        if estado != 'Disponible':
+            conn.close()
+            return False, f"La copia {numero_serie} no está disponible (estado: {estado})."
+        
+        # 2. Registrar el préstamo
+        hora_exacta = obtener_hora_chile()
+        cursor.execute('''INSERT INTO prestamos_libro (numero_serie, responsable, destino, tipo_usuario, fecha_salida)
+                          VALUES (?, ?, ?, ?, ?)''',
+                       (numero_serie, responsable, destino, tipo_usuario, hora_exacta))
+        
+        # 3. Actualizar estado de la copia
+        cursor.execute("UPDATE copias_libro SET estado = 'Prestado' WHERE numero_serie = ?", (numero_serie,))
+        
+        conn.commit()
+        conn.close()
+        
+        return True, f"Copia {numero_serie} prestada a {responsable}."
+    except Exception as e:
+        return False, f"Error al prestar copia: {e}"
+
+
+def devolver_copia_libro_db(numero_serie):
+    """
+    Registra la devolución de una copia de un libro.
+    
+    Args:
+        numero_serie: Número de serie de la copia a devolver
+    
+    Returns:
+        (success: bool, message: str, info_prestamo: dict)
+    """
+    try:
+        conn = conectar_db()
+        cursor = conn.cursor()
+        
+        # 1. Buscar el préstamo activo
+        cursor.execute('''SELECT id, responsable, fecha_salida FROM prestamos_libro 
+                          WHERE numero_serie = ? AND fecha_devolucion IS NULL''',
+                       (numero_serie,))
+        prestamo = cursor.fetchone()
+        
+        if not prestamo:
+            conn.close()
+            return False, f"La copia {numero_serie} no tiene préstamos activos.", {}
+        
+        id_prestamo, responsable, fecha_salida = prestamo
+        
+        # 2. Registrar la devolución
+        hora_exacta = obtener_hora_chile()
+        cursor.execute("UPDATE prestamos_libro SET fecha_devolucion = ? WHERE id = ?",
+                       (hora_exacta, id_prestamo))
+        
+        # 3. Actualizar estado de la copia
+        cursor.execute("UPDATE copias_libro SET estado = 'Disponible' WHERE numero_serie = ?", 
+                       (numero_serie,))
+        
+        conn.commit()
+        conn.close()
+        
+        info_prestamo = {
+            'numero_serie': numero_serie,
+            'responsable': responsable,
+            'fecha_salida': fecha_salida,
+            'fecha_devolucion': hora_exacta
+        }
+        
+        return True, f"Copia {numero_serie} devuelta por {responsable}.", info_prestamo
+    except Exception as e:
+        return False, f"Error al devolver copia: {e}", {}
+
+
+def obtener_historial_copia_libro_db(numero_serie):
+    """
+    Obtiene el historial completo de préstamos de una copia.
+    
+    Args:
+        numero_serie: Número de serie de la copia
+    
+    Returns:
+        list: [(id, responsable, destino, tipo_usuario, fecha_salida, fecha_devolucion), ...]
+    """
+    try:
+        conn = conectar_db()
+        cursor = conn.cursor()
+        
+        cursor.execute('''SELECT id, responsable, destino, tipo_usuario, fecha_salida, fecha_devolucion
+                          FROM prestamos_libro
+                          WHERE numero_serie = ?
+                          ORDER BY fecha_salida DESC''',
+                       (numero_serie,))
+        historial = cursor.fetchall()
+        conn.close()
+        
+        return historial
+    except Exception as e:
+        logger.error(f"Error obteniendo historial: {e}")
+        return []
+
+
+def buscar_copia_por_numero_serie_db(numero_serie):
+    """
+    Busca una copia específica y retorna toda su información.
+    
+    Returns:
+        dict: {'encontrado': bool, 'numero_serie': str, 'codigo_libro': str, 
+               'nombre_libro': str, 'estado': str, 'responsable': str, ...}
+    """
+    try:
+        conn = conectar_db()
+        cursor = conn.cursor()
+        
+        query = '''
+            SELECT 
+                cl.numero_serie,
+                cl.codigo_libro,
+                l.nombre,
+                l.autor,
+                cl.estado,
+                COALESCE(pl.responsable, 'Sin préstamo') as responsable,
+                COALESCE(pl.destino, 'N/A') as destino,
+                COALESCE(pl.fecha_salida, 'N/A') as fecha_salida
+            FROM copias_libro cl
+            JOIN libros l ON cl.codigo_libro = l.codigo_libro
+            LEFT JOIN prestamos_libro pl ON cl.numero_serie = pl.numero_serie AND pl.fecha_devolucion IS NULL
+            WHERE cl.numero_serie = ?
+        '''
+        
+        cursor.execute(query, (numero_serie,))
+        resultado = cursor.fetchone()
+        conn.close()
+        
+        if resultado:
+            return {
+                'encontrado': True,
+                'numero_serie': resultado[0],
+                'codigo_libro': resultado[1],
+                'nombre_libro': resultado[2],
+                'autor': resultado[3],
+                'estado': resultado[4],
+                'responsable': resultado[5],
+                'destino': resultado[6],
+                'fecha_salida': resultado[7]
+            }
+        else:
+            return {'encontrado': False}
+    except Exception as e:
+        logger.error(f"Error buscando copia: {e}")
+        return {'encontrado': False}
